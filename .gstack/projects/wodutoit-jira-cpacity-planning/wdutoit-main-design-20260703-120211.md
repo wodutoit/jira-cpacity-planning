@@ -82,26 +82,26 @@ T-shirt sized ideas, a visible threshold line — open during a planning meeting
 ## Constraints
 
 - Platform: Atlassian Forge (cloud-native; data stays in Atlassian cloud).
+- **Forge app surface:** `jira:globalPage` (top-level Jira navigation). Cross-team releases span multiple projects; a project-scoped page would require opening a separate instance per team.
 - Instance: sterlandsupport.atlassian.net (Cloud ID 27fae7eb-3b1d-4aa0-9a87-d8a37082592e).
-- JPD adoption is in progress — planning mode must work with both ROAD items and JPD ideas
-  during the transition (see Glossary — ROAD).
-- Jira Version is the anchor object for a release. Version tagging discipline is being enforced
-  as part of this rollout.
-- T-shirt sizes live on JPD ideas as a JPD-native story-points field (or custom field — exact
-  field key to be confirmed in the JPD spike; see The Assignment). During ROAD transition, the
-  same custom field used on ROAD items today will be read instead.
-- T-shirt → story points: configurable map, stored in Forge Storage (default: XS=1, S=3, M=8,
-  L=13, XL=21). No per-person availability modelling in v1.
-- Capacity numbers: the DM enters the effective team capacity for the release (story points /
-  velocity units), reduced from raw team velocity to account for planned leave, overhead, or
-  other known constraints. A free-text note field accompanies each entry.
+- JPD adoption is in progress — planning mode must work with both ROAD items and JPD ideas during the transition (see Glossary — ROAD).
+- **Teams are read from Jira Teams API** (`/rest/teams/1.0/teams/`) on page load — not stored in Forge Storage. No custom team admin page in v1. Add Jira Teams API access check to Spike #2. `teamId` used as the storage key in per-release capacity records refers to the Jira Teams ID.
+- Jira Version is the anchor object for a release. Version tagging discipline is being enforced as part of this rollout. The warning banner covers partial tagging at runtime.
+- T-shirt sizes live on JPD ideas as a JPD-native story-points field (or custom field — exact field key confirmed in Spike #2). During ROAD transition, the same custom field used on ROAD items today will be read instead.
+- T-shirt → story points: configurable map, stored in Forge Storage `config` key (default: XS=1, S=3, M=8, L=13, XL=21). Unit: story points. No per-person availability modelling in v1.
+- Capacity numbers: the DM enters the effective team capacity for the release in story points, reduced from raw team velocity to account for leave and overhead.
 - Waterline re-colouring must feel live: client-side recompute on every change, not a page reload or Forge round-trip.
-- **Write model (two paths):** Team assignment writes go directly to Jira asynchronously on each reassignment (no Save button for this action). Capacity numbers and threshold settings are saved to Forge Storage only on explicit user action via a Save button; unsaved changes show an indicator. Concurrent writes to Forge Storage are last-write-wins. Two users editing simultaneously is not supported in v1; the app is designed for a single editor (DM) during a planning session.
-- **Access control:** Capacity and threshold editing is restricted to Jira project admins or a configurable set of named users, managed via the Forge app configuration page (accessible to Jira site admins only; input: Atlassian account IDs). Read access is open to all project members. Idea T-shirt sizing and team assignment use standard Jira/JPD write permissions.
-- **Forge Storage schema — releases** (one key per release): `Key: "release:<versionId>"` → `{ teams: { [teamId]: { capacity: number } }, threshold: number, warningThresholdPct: number }`. `threshold` is the fill-target percentage (default 70). `warningThresholdPct` is the version-tagging coverage threshold below which the "ideas may be missing" banner appears (default 10% untagged = 90% coverage required; configurable per release). Note field on team capacity deliberately omitted from v1 schema — deferred to v1.1.
-- **Forge Storage schema — teams** (one key per install): `Key: "teams"` → `{ teams: [{ id: string, name: string, boardId: number }] }`. Managed via the Forge app configuration page (site-admin only). Team IDs are stable internal identifiers; `boardId` links a team to a Jira board for delivery-mode sprint queries. Board IDs are optional in v1 (planning mode does not use them); required before delivery mode begins.
-- **Forge Storage partitioning:** One key per release, partitioned to stay within the 32 KB per-value limit. Quota validation: confirm key limit at steady state (projected releases/year × 3-year retention < 80% of documented Forge Storage key quota) during Spike #2.
-- **Epic traversal algorithm:** Query for all Epics with `fixVersion = <selectedVersion>` via Forge API. Fetch child issues of those Epics in the same Forge function call, handling Jira REST API pagination internally (max 100 results per page; loop until `startAt + maxResults >= total`). Return the full aggregated payload to the React frontend as a single object. Note: for large releases this loop runs inside the Forge function — latency scales with issue count. The Spike #1 load test must use a real release with representative volume (not a synthetic empty version) to validate the < 1.5 s target holds under pagination.
+- **Write model (two paths):** Team assignment writes go directly to Jira asynchronously on each reassignment (no Save button for this action). Capacity numbers and threshold settings are saved to Forge Storage only on explicit Save button; unsaved changes show a persistent inline banner ("Unsaved changes — Save to keep"). Concurrent writes are last-write-wins. Single-editor design in v1.
+- **Unsaved data protection:** A React dirty-check state drives a persistent inline "Unsaved changes" banner visible throughout the planning session. This banner (not a `beforeunload` dialog) is the guard against data loss — `beforeunload` does not fire on in-Jira SPA navigation (Jira is a single-page app).
+- **Access control:** Capacity and threshold editing is restricted to a per-install global list of Atlassian account IDs stored in Forge Storage (`config` key — see schema). Editor vs. everyone-else distinction; no per-release scoping in v1. The authorization check runs in the Forge resolver (server-side), not the React frontend. Read access is open to all project members.
+- **Draft manifest scopes** (to be confirmed in Spike #2): `read:jira-data` (fetch issues, versions, epics, teams), `write:jira-work` (write team assignment field), `storage:app` (Forge Storage), `read:jira-user` (access control check). Listed now to unblock Spike #1a deployment; Spike #2 adjusts as needed.
+- **Forge Storage schema** (complete, 2 keys):
+  - `Key: "release:<versionId>"` → `{ teams: { [jiraTeamId]: { capacity: number } }, threshold: number, warningThresholdPct: number }`. `threshold` = fill-target % (default 70). `warningThresholdPct` = untagged-ideas banner threshold (default 10%).
+  - `Key: "config"` → `{ tshirtScale: { XS: 1, S: 3, M: 8, L: 13, XL: 21 }, editorAccountIds: string[], defaultThreshold: number }`. Managed via Forge app config page (site-admin only). `editorAccountIds` is the global ACL for capacity/threshold editing.
+- **Forge Storage partitioning:** One key per release. Total keys at steady state (projected releases × 3-year retention + 1 config key) must be < 80% of Forge Storage quota. Validate during Spike #2.
+- **Epic traversal algorithm:** Single `getAll()` Forge function call returns: (1) all Epics with `fixVersion = <selectedVersion>` via JQL; (2) child issues paginated internally (max 100 results per page, loop until `startAt + maxResults >= total`); (3) Jira Teams API response; (4) `release:<versionId>` and `config` Forge Storage reads. Returns one merged payload to the React frontend — one bridge hop on page load.
+- **Performance:** Merge all Forge Storage reads and Jira API calls into a single `getAll()` resolver invocation. All waterline computation happens in React state after the initial load.
+- **Test stack:** Vitest (unit — resolver functions and React components) + Playwright (E2E on a Jira developer instance). See test plan artifact.
 - No external reporting tools; no admins to operate it.
 - Planned Version lives at Epic level — any release-assembly traversal reads version via the parent Epic, not the Story.
 
@@ -248,38 +248,196 @@ sequence rather than in parallel reduces risk.
 
 ## The Assignment
 
-**Complete two spikes before writing a line of application logic.** Both spikes are prerequisite
-gates; skip either and you risk building on a broken foundation.
+**Three spike phases gate all application logic. No phase is optional.**
 
-### Spike #1 — Forge bridge latency
+### Spike #1a — Forge bridge read latency (run in parallel with Spike #2)
 
-Build one Forge Custom UI page that:
-1. Calls a Forge function to fetch all issues for a real Jira Version from sterlandsupport.
-2. Returns them to the React frontend as a single payload.
+Build one Forge Custom UI page (globalPage surface) that:
+
+1. Calls a single `getAll()` Forge function: fetch Epics by fixVersion JQL + child issues (paginated) + Jira Teams API + Forge Storage config read.
+2. Returns one merged payload to the React frontend.
 3. Renders a bar chart (one bar per team, story points summed) with a hardcoded capacity line.
-4. **Also:** performs a single issue field update (team assignment) to simulate a reassignment write and measures the round-trip time.
 
-**Pass criteria:** (a) page-open-to-chart < 1.5 seconds; (b) client-side recompute after reassignment < 200 ms. Jira write round-trip measured for observability (target: completes within 5 seconds) but not a blocking gate — it is async and must not block the UI.
+Use a real Jira Version from sterlandsupport with representative volume (not an empty version).
 
-**If fail on (a):** redesign the fetch strategy (single Forge function call returning all data as one payload; all waterline logic in React state) before proceeding.
+**Pass criteria:** (a) page-open-to-chart < 1.5 seconds; (b) client-side recolour after a simulated prop change < 200 ms.
 
-### Spike #2 — JPD field readability
+**If fail on (a):** Forge function is timing out on pagination. Redesign: batch epic child fetches in parallel within the resolver using `Promise.all()` before returning. Re-run spike before any further implementation.
+
+### Spike #2 — JPD and Teams API field readability (run in parallel with Spike #1a)
 
 1. Fetch one JPD idea via the Forge API and confirm the T-shirt/story-size field is readable and its API field key.
 2. Fetch one ROAD item from the current ROAD project and confirm the same (or equivalent) field is readable.
 3. Confirm the Jira/JPD field used for team assignment and verify it is writable via the Forge API.
-4. Confirm the Forge manifest scopes required for read access to JPD ideas and write access to the team assignment field.
-5. Confirm Forge Storage key limit; verify that estimated steady-state key count (projected releases/year × 3-year retention) is below 80% of the documented quota.
-6. Record: JPD field key, ROAD project key, ROAD sizing field key, team assignment field key. These become constants in the app configuration.
+4. **Confirm Jira Teams API** (`/rest/teams/1.0/teams/`) is accessible from a Forge resolver; record the response shape and the field that maps to team ID.
+5. Confirm the Forge manifest scopes required (read:jira-data, write:jira-work, storage:app, read:jira-user — adjust from the draft list if needed).
+6. Confirm Forge Storage quota at steady state.
+7. Record all confirmed field keys and API response shapes as constants in the app's config module.
 
-**Pass criteria:** all field keys confirmed readable/writable, manifest scopes confirmed, Forge Storage quota validated.
+**Pass criteria:** all field keys confirmed readable/writable, Jira Teams API accessible, manifest scopes confirmed, Storage quota validated.
 
-**If fail on T-shirt fields:** the planning-mode data model requires a redesign — DM enters T-shirt sizes manually in Forge Storage rather than reading from Jira/JPD. Estimated additional effort: S (~1 week). Decision to pivot requires DM sign-off before any further work proceeds.
+**If fail on T-shirt fields:** redesign — DM enters T-shirt sizes manually in Forge Storage config. Additional effort: S (~1 week). DM sign-off required before proceeding.
 
-**If fail on team assignment field:** team reassignment must be implemented via a different writable field (e.g., a JPD custom field or a Jira label). Resolve before writing any reassignment logic.
+**If fail on team assignment field:** implement reassignment via an alternative writable field (JPD custom field or Jira label). Resolve before writing any reassignment logic.
+
+**If fail on Jira Teams API:** fall back to a hardcoded teams list in the Forge environment config for v1; dynamic team management deferred to v1.1.
+
+### Spike #1b — Forge bridge write latency (run after Spike #2 completes)
+
+Using the confirmed team assignment field key from Spike #2:
+
+1. Perform a single issue field update (the confirmed team assignment field) via the Forge API.
+2. Measure wall-clock time from write call to Jira confirmation.
+
+**Pass criteria:** write completes within 5 seconds (async, non-blocking — does not gate the UI recolour).
+
+**If fail:** the write is too slow for the async-fire-and-forget model. Explore Forge queue-based writes or accept a longer async window with user-visible confirmation toast.
 
 ---
 
 ## Sources
 
 - `.spec/release-capacity-waterline-requirements.md` — full functional requirements (P1–P10, D1–D8). This design doc summarises the approach; the spec is the authoritative requirements list for implementation.
+
+---
+
+## NOT in Scope (v1)
+
+- **Delivery mode** (sprint-level waterline, D1–D8) — deferred to v2; requires sprint-to-board data model design first.
+- **Per-person leave scheduling** — DM enters deflated team capacity number directly; reason captured as a note.
+- **CI/CD pipeline** — manual `forge deploy` for v1; GitHub Actions deferred to v2.
+- **Atlassian Marketplace listing** — internal install only.
+- **Mobile/responsive design** — desktop Jira is the target; not mentioned in requirements.
+- **Team admin UI** — teams sourced from Jira Teams API; no custom admin page needed in v1.
+- **Note field on capacity entries** — deferred to v1.1; omitted from Forge Storage schema.
+- **Concurrent multi-editor support** — single-editor design in v1; last-write-wins acknowledged.
+
+---
+
+## What Already Exists
+
+- **`@forge/api`** — Atlassian library handles all Jira REST calls server-side; no HTTP wrapper to build.
+- **`@forge/storage`** — Forge Storage client; no abstraction layer needed.
+- **`@forge/resolver`** — resolver framework for Custom UI bridge; no custom IPC needed.
+- **Jira Versions API** — release identity is a Jira Version; no custom release entity needed in Forge Storage.
+- **Jira Teams API** — team names and IDs already exist in Jira Teams; no custom team registry needed.
+- **JPD ideas API** — existing read surface for T-shirt sizes; field key confirmed in Spike #2.
+
+---
+
+## Parallelization Strategy
+
+Two independent workstreams can run in parallel after Spike #1a and Spike #2 pass:
+
+| Step | Modules touched | Depends on |
+| --- | --- | --- |
+| Spike #1a (read latency) | Forge resolver, React Custom UI | — |
+| Spike #2 (field readability) | Forge resolver (read-only probe) | — |
+| Spike #1b (write latency) | Forge resolver (write) | Spike #2 (field key confirmed) |
+| Resolver: `getAll()` | Forge resolver | Spike #1a pass, Spike #2 pass |
+| React: WaterlineChart | src/ui/ | Spike #1a pass (know payload shape) |
+| React: CapacityEditor + banner | src/ui/ | Resolver: `getAll()` shape |
+| Resolver: `saveCapacity()` | Forge resolver | Spike #1b pass |
+| Resolver: `reassignIdea()` | Forge resolver | Spike #1b pass |
+| Vitest unit tests | test/ | Resolver functions implemented |
+| Playwright E2E | e2e/ | App deployed to developer instance |
+
+**Lane A:** Spike #1a → `getAll()` resolver → WaterlineChart → CapacityEditor
+**Lane B:** Spike #2 (parallel with #1a) → Spike #1b → `saveCapacity()` + `reassignIdea()`
+**Lane C:** Vitest + Playwright (after Lane A + B merge)
+
+Launch A + B in parallel. Merge after both spikes pass. Then C.
+
+---
+
+## Failure Modes
+
+| Code path | Realistic failure | Test covers it? | Error handling? | User sees? |
+| --- | --- | --- | --- | --- |
+| `getAll()` — Epics JQL | Forge function timeout (large release, slow pagination) | Spike #1a | Full-page error + Retry | Clear |
+| `getAll()` — Jira Teams API | Teams API not accessible from Forge resolver | Spike #2 | Full-page error | Clear |
+| `getAll()` — Forge Storage read | Storage unavailable | Planned unit test | Full-page error + Retry | Clear |
+| `reassignIdea()` — Jira write | Field key wrong / permission denied | Planned unit test | Toast + revert | Clear |
+| `saveCapacity()` — ACL check | User not in editorAccountIds | Planned unit test | Silent read-only (edit controls hidden) | Clear |
+| `saveCapacity()` — Storage write | Storage write failure | Planned unit test | Save button shows error state | Clear |
+| React unsaved-changes banner | User navigates away mid-session | Playwright E2E | Banner persists until saved | Clear |
+| Pagination loop | > 1000 child issues (Forge function timeout) | Spike #1a (representative volume) | Full-page timeout error | Clear |
+
+**Critical gaps:** None identified. All failure modes have planned test coverage or are validated by spikes.
+
+---
+
+## Implementation Tasks
+
+Synthesized from this review's findings. Run with Claude Code; checkbox as you ship.
+
+- [ ] **T1 (P1, human: ~2h / CC: ~20min)** — Forge manifest — Create `manifest.yml` with `jira:globalPage` surface and draft scopes (`read:jira-data`, `write:jira-work`, `storage:app`, `read:jira-user`). Required before Spike #1a can deploy.
+  - Surfaced by: Architecture — D1 (globalPage) + D2 (draft scopes now)
+  - Files: `manifest.yml`
+  - Verify: `forge deploy` succeeds on sterlandsupport
+
+- [ ] **T2 (P1, human: ~1d / CC: ~1h)** — Spike #1a — Read latency probe with real Jira Version, paginated child fetch, Jira Teams API, single bridge hop.
+  - Surfaced by: Architecture — Design Risk (bridge latency) + D7 (split spike)
+  - Files: `src/resolvers/getAll.ts`, `src/ui/App.tsx`
+  - Verify: page-open-to-chart < 1.5s measured; recolour < 200ms measured
+
+- [ ] **T3 (P1, human: ~1d / CC: ~1h)** — Spike #2 — Confirm JPD T-shirt field, ROAD field, team assignment field, Jira Teams API access, manifest scopes, Storage quota.
+  - Surfaced by: Architecture — D2 + CQ2 + D9
+  - Files: `src/resolvers/probe.ts` (throwaway), `docs/spike2-results.md`
+  - Verify: all field keys documented; Jira Teams API response shape confirmed
+
+- [ ] **T4 (P1, human: ~2h / CC: ~20min)** — Spike #1b — Write latency with confirmed team assignment field from Spike #2.
+  - Surfaced by: Architecture — D7 (write portion after Spike #2)
+  - Files: `src/resolvers/probe.ts`
+  - Verify: write round-trip < 5s measured
+
+- [ ] **T5 (P2, human: ~3h / CC: ~30min)** — Forge Storage layer — Implement `release:<versionId>` and `config` keys per schema; resolver-level ACL check in `saveCapacity()`.
+  - Surfaced by: Code Quality — D4 (missing storage keys) + CQ2 (resolver auth)
+  - Files: `src/storage/schema.ts`, `src/resolvers/saveCapacity.ts`
+  - Verify: Vitest unit tests for happy path, unauthorized user, Storage failure
+
+- [ ] **T6 (P2, human: ~2d / CC: ~2h)** — WaterlineChart React component — Green/amber/red colour states; client-side recolour < 200ms; no-capacity state; unassigned/unsized counts.
+  - Surfaced by: Test review — coverage diagram (0/27 paths tested)
+  - Files: `src/ui/WaterlineChart.tsx`
+  - Verify: Vitest component tests for all colour states
+
+- [ ] **T7 (P2, human: ~1d / CC: ~1h)** — Capacity editor — Save button, dirty-check state, persistent inline unsaved-changes banner (replaces beforeunload which doesn't fire on SPA navigation).
+  - Surfaced by: Architecture — D3/D6 (SPA navigation gap)
+  - Files: `src/ui/CapacityEditor.tsx`
+  - Verify: Playwright unsaved-guard E2E test
+
+- [ ] **T8 (P2, human: ~1d / CC: ~1h)** — `getAll()` resolver — Single Forge function returning merged payload (epics + children paginated + Jira Teams + Forge Storage config).
+  - Surfaced by: Architecture — epic traversal algorithm + D9 (Teams API)
+  - Files: `src/resolvers/getAll.ts`
+  - Verify: Vitest unit tests for 0 epics, pagination, Jira API failure
+
+- [ ] **T9 (P2, human: ~2h / CC: ~20min)** — `reassignIdea()` resolver — Async Jira write; failure toast + state revert in React.
+  - Surfaced by: Test review — coverage diagram (reassign flow)
+  - Files: `src/resolvers/reassignIdea.ts`, `src/ui/IdeaList.tsx`
+  - Verify: Vitest unit test for happy path + Jira failure + revert
+
+- [ ] **T10 (P3, human: ~1d / CC: ~1h)** — Vitest unit tests — All resolver functions + WaterlineChart + CapacityEditor.
+  - Surfaced by: Test review — D5 (Vitest selected), 27 gaps identified
+  - Files: `test/resolvers/*.test.ts`, `test/ui/*.test.tsx`
+  - Verify: `vitest run` passes, 100% resolver branch coverage
+
+- [ ] **T11 (P3, human: ~1d / CC: ~2h)** — Playwright E2E — plan-release, reassign-idea, unsaved-guard, read-only-view, first-use flows.
+  - Surfaced by: Test review — 5 E2E flows identified
+  - Files: `e2e/*.e2e.ts`, `playwright.config.ts`
+  - Verify: `playwright test` passes against Jira developer instance
+
+---
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+| --- | --- | --- | --- | --- | --- |
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 9 decisions, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+**VERDICT:** ENG CLEARED — ready to implement. Run Spike #1a and Spike #2 in parallel first.
+
+NO UNRESOLVED DECISIONS
