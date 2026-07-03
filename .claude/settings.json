@@ -1,4 +1,7 @@
 {
+  "env": {
+    "GSTACK_HOME": "c:\\Dev\\github_projects\\jira-cpacity-planning\\.gstack"
+  },
   "hooks": {
     "PreToolUse": [
       {
