@@ -27,9 +27,11 @@ during the JPD spike in The Assignment). After full JPD migration, ROAD items wi
 appear in the waterline. The app must handle both sources during the transition period.
 
 **Threshold:** A configurable percentage of team capacity, stored per release in Forge Storage
-(default: 70%). Rendered as a horizontal line on the waterline bar chart, distinct from the
-full-capacity bar top. An engineer can change the default in app config; a DM can override it
-per release.
+(default: 70%). Rendered as a horizontal dashed line (2px, ADS warning-orange `#FF991F`) spanning
+the full width of all team bars at the threshold height. A small floating label on the right edge
+shows the current threshold value (e.g., "70%"). Distinct from the full-capacity bar top by style
+(dashed vs solid) and color (amber vs neutral). An engineer can change the default in app config;
+a DM can override it per release.
 
 ---
 
@@ -82,22 +84,25 @@ T-shirt sized ideas, a visible threshold line — open during a planning meeting
 ## Constraints
 
 - Platform: Atlassian Forge (cloud-native; data stays in Atlassian cloud).
+- **Component library: Atlassian Design System 3 (`@atlaskit/*`).** Use ADS color tokens for all colours (success, warning, danger, neutral); ADS components for all form fields, buttons, banners, lozenges, tables, and pickers. The waterline bars are custom SVG/canvas elements but use ADS color tokens. Do not import a second component library alongside Atlaskit.
 - **Forge app surface:** `jira:globalPage` (top-level Jira navigation). Cross-team releases span multiple projects; a project-scoped page would require opening a separate instance per team.
 - Instance: sterlandsupport.atlassian.net (Cloud ID 27fae7eb-3b1d-4aa0-9a87-d8a37082592e).
 - JPD adoption is in progress — planning mode must work with both ROAD items and JPD ideas during the transition (see Glossary — ROAD).
-- **Teams are read from Jira Teams API** (`/rest/teams/1.0/teams/`) on page load — not stored in Forge Storage. No custom team admin page in v1. Add Jira Teams API access check to Spike #2. `teamId` used as the storage key in per-release capacity records refers to the Jira Teams ID.
+- **Teams are read from Jira Teams API** (`/rest/teams/1.0/teams/`) on page load — not stored in Forge Storage. No custom team admin page in v1. Jira Teams API accessibility is a **hard gate** in Spike #2: if the API is not accessible from a Forge resolver, the app does not ship until this is resolved. `teamId` used as the storage key in per-release capacity records refers to the Jira Teams ID.
 - Jira Version is the anchor object for a release. Version tagging discipline is being enforced as part of this rollout. The warning banner covers partial tagging at runtime.
 - T-shirt sizes live on JPD ideas as a JPD-native story-points field (or custom field — exact field key confirmed in Spike #2). During ROAD transition, the same custom field used on ROAD items today will be read instead.
 - T-shirt → story points: configurable map, stored in Forge Storage `config` key (default: XS=1, S=3, M=8, L=13, XL=21). Unit: story points. No per-person availability modelling in v1.
 - Capacity numbers: the DM enters the effective team capacity for the release in story points, reduced from raw team velocity to account for leave and overhead.
+- **Session persistence:** The last-selected version ID is persisted in `localStorage` (key: `cpw:lastVersionId`). On page open, if a stored version ID is found, restore the selection and trigger `getAll()` immediately — the app opens to the DM's last planning session without requiring a picker interaction. If the stored version no longer exists (archived), fall back to the "Select a version to begin" prompt.
 - Waterline re-colouring must feel live: client-side recompute on every change, not a page reload or Forge round-trip.
 - **Write model (two paths):** Team assignment writes go directly to Jira asynchronously on each reassignment (no Save button for this action). Capacity numbers and threshold settings are saved to Forge Storage only on explicit Save button; unsaved changes show a persistent inline banner ("Unsaved changes — Save to keep"). Concurrent writes are last-write-wins. Single-editor design in v1.
+- **Capacity editor UX:** Each team bar has an editable ADS `NumberField` directly below it showing the current capacity in story points (e.g. "180"). Any field is directly editable (no edit mode toggle). One sticky Save button at the bottom of the chart area saves all dirty fields in a single Forge Storage write (`release:<versionId>`). The threshold value for the release is similarly editable as a single "Threshold: __%" NumberField adjacent to the Save button. The unsaved-changes banner activates as soon as any capacity or threshold field is changed.
 - **Unsaved data protection:** A React dirty-check state drives a persistent inline "Unsaved changes" banner visible throughout the planning session. This banner (not a `beforeunload` dialog) is the guard against data loss — `beforeunload` does not fire on in-Jira SPA navigation (Jira is a single-page app).
 - **Access control:** Capacity and threshold editing is restricted to a per-install global list of Atlassian account IDs stored in Forge Storage (`config` key — see schema). Editor vs. everyone-else distinction; no per-release scoping in v1. The authorization check runs in the Forge resolver (server-side), not the React frontend. Read access is open to all project members.
 - **Draft manifest scopes** (to be confirmed in Spike #2): `read:jira-data` (fetch issues, versions, epics, teams), `write:jira-work` (write team assignment field), `storage:app` (Forge Storage), `read:jira-user` (access control check). Listed now to unblock Spike #1a deployment; Spike #2 adjusts as needed.
 - **Forge Storage schema** (complete, 2 keys):
   - `Key: "release:<versionId>"` → `{ teams: { [jiraTeamId]: { capacity: number } }, threshold: number, warningThresholdPct: number }`. `threshold` = fill-target % (default 70). `warningThresholdPct` = untagged-ideas banner threshold (default 10%).
-  - `Key: "config"` → `{ tshirtScale: { XS: 1, S: 3, M: 8, L: 13, XL: 21 }, editorAccountIds: string[], defaultThreshold: number }`. Managed via Forge app config page (site-admin only). `editorAccountIds` is the global ACL for capacity/threshold editing.
+  - `Key: "config"` → `{ tshirtScale: { XS: 1, S: 3, M: 8, L: 13, XL: 21 }, editorAccountIds: string[], defaultThreshold: number, untaggedIdeaStatuses: string[] }`. `untaggedIdeaStatuses` defaults to `["To Do", "Backlog"]` — Jira status names treated as "candidate untagged ideas" for the tagging-rate banner. Managed via T5b config page (site-admin only). `editorAccountIds` is the global ACL for capacity/threshold editing.
 - **Forge Storage partitioning:** One key per release. Total keys at steady state (projected releases × 3-year retention + 1 config key) must be < 80% of Forge Storage quota. Validate during Spike #2.
 - **Epic traversal algorithm:** Single `getAll()` Forge function call returns: (1) all Epics with `fixVersion = <selectedVersion>` via JQL; (2) child issues paginated internally (max 100 results per page, loop until `startAt + maxResults >= total`); (3) Jira Teams API response; (4) `release:<versionId>` and `config` Forge Storage reads. Returns one merged payload to the React frontend — one bridge hop on page load.
 - **Performance:** Merge all Forge Storage reads and Jira API calls into a single `getAll()` resolver invocation. All waterline computation happens in React state after the initial load.
@@ -107,16 +112,47 @@ T-shirt sized ideas, a visible threshold line — open during a planning meeting
 
 ---
 
+## Page Layout
+
+Single-column, full-width Jira globalPage. Top to bottom:
+
+```text
++-------------------------------------------------+
+| [Version picker: v2.4 Apollo]  [Unsaved banner] |
++-------------------------------------------------+
+|  WATERLINE CHART                                |
+|  [ Apollo ]  [ Adama ]  [ Zenith ]  [ Cylon ] [ Total ] |
+|  [ bar    ]  [ bar   ]  [ bar    ]  [ bar   ] [ bar   ] |
+|  [ === threshold line ======================================= ] |
++-------------------------------------------------+
+|  IDEA LIST (scrollable)                         |
+|  [ idea title ][ size ][ team ][ status ]       |
+|  ...                                            |
+|  ── Unassigned ─────────────────────────────── |
+|  [ unassigned idea ][ — ][ — ][ status ]        |
++-------------------------------------------------+
+```
+
+- **Version picker** (ADS Select) sits at top-left. On selection, triggers the `getAll()` bridge call and replaces all content below.
+- **Unsaved changes banner** (ADS Banner, yellow) appears at top-right of the header row when capacity numbers are dirty. "Unsaved changes — Save to keep" + Save button.
+- **Waterline chart** occupies the primary viewport. Each team bar is vertical; story points accumulate bottom-up. The threshold line is a horizontal dashed line across all bars. Each bar shows a short state label at its base: "OK" (below threshold), "FILLING" (between threshold and capacity), "OVER" (above capacity). Color is the dominant visual channel; the label is the accessible fallback for color-blind users (red-green color blindness affects ~8% of males).
+- **Total bar** is a fifth bar in the waterline chart, visually separated from the team bars by a thin divider, labelled "Total". It shows aggregate allocated points vs aggregate capacity across all teams. Recolours live with the same green/amber/red logic as team bars. Spec P8.
+- **Idea list** scrolls below the chart. ADS `DynamicTable` (or equivalent dense table). Columns: title (left-aligned, clickable link to JPD/ROAD item), size (ADS Lozenge badge), team (inline ADS Select dropdown), status (ADS Lozenge). Sortable by size and team. The "Unassigned" group is a visually separated section at the bottom with a divider row "── Unassigned (N)". Matches Jira's native issue-list conventions to reduce the 'foreign app inside Jira' feel.
+
+---
+
 ## Error States
 
 | State | User sees |
 | --- | --- |
+| No version selected (config exists, fresh session) | Content area shows a centred prompt: "Select a version to begin planning." Version picker is the primary action. Chart and idea list not rendered. |
+| `getAll()` in flight (version selected or page loading) | Skeleton loader: grey placeholder bars where team bars will appear (same dimensions), grey rows where idea list will appear. No spinner. Disappears when payload arrives. |
 | Version has zero tagged ideas | Empty-state message: "No ideas linked to this version. Add ideas in JPD or link existing issues." |
 | A team has no capacity entered | Bar shows 0 with an "Enter capacity" prompt inline. Threshold line not drawn until capacity is set. |
 | Forge API call fails on page load | Full-page error with a Retry button. Partial failure (one team's data missing) shows that team's bar in an error state with a tooltip. |
 | Idea has no T-shirt size set | Idea appears in the list with a "—" size indicator; it contributes 0 points to the waterline. A count of unsized ideas is shown above the waterline. |
 | Idea has no team assigned | Idea appears in an "Unassigned" bucket below all team bars; contributes 0 points to any team waterline. Count of unassigned ideas shown alongside unsized count. |
-| Version tagging rate below configured threshold | Warning banner: "N ideas have no version tag — waterline may be incomplete." Denominator: count of open JPD/ROAD ideas in active planning status with no fixVersion set. Threshold (default: show banner when untagged count > 10% of in-version ideas) is configurable. |
+| Version tagging rate below configured threshold | Warning banner: "N ideas have no version tag — waterline may be incomplete." Denominator: count of open JPD/ROAD ideas in statuses listed in `config.untaggedIdeaStatuses` (default: ["To Do", "Backlog"]) with no fixVersion set. Threshold (default: show banner when untagged count > 10% of in-version ideas) is configurable. |
 | Async Jira write fails (team reassignment) | Non-blocking toast: "Reassignment could not be saved. Retry?" In-memory state reverts to prior team assignment if user does not retry. |
 
 ---
@@ -179,7 +215,7 @@ curated sprint-to-release mapping in Forge Storage) before any implementation, n
 
 ## Recommended Approach
 
-**Phased: A then B (builder's choice)**
+Phased: A then B (builder's choice)
 
 v1 scope = Approach A (planning mode only). Approach B (delivery mode) is the committed roadmap
 once planning mode is validated in a real planning meeting.
@@ -188,7 +224,7 @@ Rationale: planning mode closes the primary pain (the "temporal" gap — data du
 not after). Delivery mode can follow once planning mode is validated. Building both modes in
 sequence rather than in parallel reduces risk.
 
-#### Effort estimates
+### Effort estimates
 
 - Planning mode (v1): M, ~3–5 weeks solo.
 - Delivery mode (v2): L–XL, ~2–3 additional months. Requires data model proposal first (see Design Risks — Sprint-to-board).
@@ -273,14 +309,17 @@ Use a real Jira Version from sterlandsupport with representative volume (not an 
 5. Confirm the Forge manifest scopes required (read:jira-data, write:jira-work, storage:app, read:jira-user — adjust from the draft list if needed).
 6. Confirm Forge Storage quota at steady state.
 7. Record all confirmed field keys and API response shapes as constants in the app's config module.
+8. Fetch one ROAD item and verify it uses the standard `fixVersion` field for the release link (not a custom "Target Release" or "Planned Version" field). If ROAD uses a custom field, the getAll() JQL must use that field key instead of `fixVersion`; otherwise ROAD items are silently excluded from the waterline throughout the transition period.
 
-**Pass criteria:** all field keys confirmed readable/writable, Jira Teams API accessible, manifest scopes confirmed, Storage quota validated.
+**Pass criteria:** all field keys confirmed readable/writable, Jira Teams API accessible, ROAD release-link field confirmed, manifest scopes confirmed, Storage quota validated.
 
 **If fail on T-shirt fields:** redesign — DM enters T-shirt sizes manually in Forge Storage config. Additional effort: S (~1 week). DM sign-off required before proceeding.
 
 **If fail on team assignment field:** implement reassignment via an alternative writable field (JPD custom field or Jira label). Resolve before writing any reassignment logic.
 
-**If fail on Jira Teams API:** fall back to a hardcoded teams list in the Forge environment config for v1; dynamic team management deferred to v1.1.
+**If fail on Jira Teams API:** this is a **hard gate** — the app does not ship until Teams API is accessible from the Forge resolver. Do not work around with a hardcoded list (requires `forge deploy` on every team change, contradicting the operating model). Investigate manifest scope or API path before proceeding.
+
+**If fail on ROAD fixVersion field:** update getAll() JQL to use the confirmed custom release-link field key. Record the field key in `src/config/fieldKeys.ts` alongside other confirmed keys.
 
 ### Spike #1b — Forge bridge write latency (run after Spike #2 completes)
 
@@ -301,8 +340,50 @@ Using the confirmed team assignment field key from Spike #2:
 
 ---
 
+## Config Page Design (T5b)
+
+Forge `jira:appSettings` surface. Accessible to Jira site admins only (enforced by the platform).
+
+### Layout
+
+Single-column ADS Form. Sections (collapsible in v1.1; flat list in v1):
+
+1. **Access Control** — who can edit capacity and threshold settings
+2. **Planning Defaults** — default fill threshold, untagged-ideas status filter
+3. **T-shirt Scale** — story-points mapping per size
+
+### Interaction States
+
+| State | User sees |
+| --- | --- |
+| Loading (Forge Storage read in flight) | Skeleton form fields while config loads. No spinner. |
+| Loaded (config exists) | Form fields pre-populated with current values. Save button disabled until a field changes. |
+| Loaded (fresh install, no config) | Form fields show defaults (threshold: 70%, tshirtScale: XS=1 S=3 M=8 L=13 XL=21, editorAccountIds: empty). Yellow ADS Banner at top: "No editors configured — all users are currently read-only. Add at least one editor to enable capacity editing." |
+| Edited (dirty) | Save button activates. |
+| Save success | ADS inline success flag below Save button: "Configuration saved." Auto-dismisses after 3s. |
+| Save failure | ADS inline error flag: "Save failed. Try again." Remains visible until next save attempt. |
+
+### Field Specifications
+
+**Access Control section:**
+
+- `editorAccountIds` — ADS `UserPicker` (multi-select). Admin searches by display name via Jira `/rest/api/3/user/search`; selected users show avatar + name. Requires `read:jira-user` scope (already in draft manifest). Empty state: "No editors — all users are read-only."
+
+**Planning Defaults section:**
+
+- `defaultThreshold` — ADS `NumberField` (0–100), "%" suffix label. Tooltip: "Fill target percentage. Ideas are assigned until this percentage of capacity is reached."
+- `untaggedIdeaStatuses` — ADS multi-select `Select` with free-text entry. Pre-populated with current Jira statuses from a `read:jira-data` fetch; admin can also type custom values. Tooltip: "Ideas in these statuses with no version tag count toward the untagged-ideas warning banner."
+
+**T-shirt Scale section:**
+
+- Five ADS `NumberField` components in a horizontal row: XS, S, M, L, XL. Each must be a positive integer. Label: "Points per T-shirt size." Reset-to-defaults link.
+
+---
+
 ## NOT in Scope (v1)
 
+- **DESIGN.md** — design system document deferred to after Spike #1a when real ADS3 components are wired up. Added to TODOS.md. The Constraints section documents ADS3 and color tokens in the interim.
+- **Tab-based layout** (chart / ideas as separate tabs) — explicitly rejected in favor of chart-above-list-below; both visible in one scrollable page.
 - **Delivery mode** (sprint-level waterline, D1–D8) — deferred to v2; requires sprint-to-board data model design first.
 - **Per-person leave scheduling** — DM enters deflated team capacity number directly; reason captured as a note.
 - **CI/CD pipeline** — manual `forge deploy` for v1; GitHub Actions deferred to v2.
@@ -322,6 +403,7 @@ Using the confirmed team assignment field key from Spike #2:
 - **Jira Versions API** — release identity is a Jira Version; no custom release entity needed in Forge Storage.
 - **Jira Teams API** — team names and IDs already exist in Jira Teams; no custom team registry needed.
 - **JPD ideas API** — existing read surface for T-shirt sizes; field key confirmed in Spike #2.
+- **Atlassian Design System 3 (`@atlaskit/*`)** — available via npm in Forge Custom UI. Provides UserPicker, Select, NumberField, DynamicTable, Banner, Lozenge, Spinner, and color tokens. No additional component library required.
 
 ---
 
@@ -381,25 +463,35 @@ Synthesized from this review's findings. Run with Claude Code; checkbox as you s
   - Files: `src/resolvers/getAll.ts`, `src/ui/App.tsx`
   - Verify: page-open-to-chart < 1.5s measured; recolour < 200ms measured
 
-- [ ] **T3 (P1, human: ~1d / CC: ~1h)** — Spike #2 — Confirm JPD T-shirt field, ROAD field, team assignment field, Jira Teams API access, manifest scopes, Storage quota.
-  - Surfaced by: Architecture — D2 + CQ2 + D9
+- [ ] **T3 (P1, human: ~1d / CC: ~1h)** — Spike #2 — Confirm JPD T-shirt field, ROAD field, team assignment field, Jira Teams API access (hard gate), ROAD fixVersion vs custom field, manifest scopes, Storage quota.
+  - Surfaced by: Architecture — D2 + CQ2 + D9 + D6 (ROAD fixVersion check)
   - Files: `src/resolvers/probe.ts` (throwaway), `docs/spike2-results.md`
-  - Verify: all field keys documented; Jira Teams API response shape confirmed
+  - Verify: all field keys documented; Jira Teams API confirmed accessible; ROAD release-link field confirmed
+
+- [ ] **T3b (P1, human: ~15min / CC: ~5min)** — Field key constants — Create `src/config/fieldKeys.ts` with named exports for all confirmed field keys from Spike #2 (TSHIRT_FIELD_KEY, ROAD_FIELD_KEY, TEAM_ASSIGNMENT_FIELD_KEY, ROAD_RELEASE_FIELD_KEY if different from fixVersion).
+  - Surfaced by: Code Quality — D2 (field keys used in 3+ resolvers; no shared constants module prevents DRY violations)
+  - Files: `src/config/fieldKeys.ts`
+  - Verify: T8 (getAll) and T9 (reassignIdea) import from this file; no inline string literals for field keys
 
 - [ ] **T4 (P1, human: ~2h / CC: ~20min)** — Spike #1b — Write latency with confirmed team assignment field from Spike #2.
   - Surfaced by: Architecture — D7 (write portion after Spike #2)
   - Files: `src/resolvers/probe.ts`
   - Verify: write round-trip < 5s measured
 
-- [ ] **T5 (P2, human: ~3h / CC: ~30min)** — Forge Storage layer — Implement `release:<versionId>` and `config` keys per schema; resolver-level ACL check in `saveCapacity()`.
-  - Surfaced by: Code Quality — D4 (missing storage keys) + CQ2 (resolver auth)
+- [ ] **T5 (P2, human: ~3h / CC: ~30min)** — Forge Storage layer — Implement `release:<versionId>` and `config` keys per schema (including `untaggedIdeaStatuses`); resolver-level ACL check in `saveCapacity()`.
+  - Surfaced by: Code Quality — D4 (missing storage keys) + CQ2 (resolver auth) + D1 (untaggedIdeaStatuses field)
   - Files: `src/storage/schema.ts`, `src/resolvers/saveCapacity.ts`
   - Verify: Vitest unit tests for happy path, unauthorized user, Storage failure
 
-- [ ] **T6 (P2, human: ~2d / CC: ~2h)** — WaterlineChart React component — Green/amber/red colour states; client-side recolour < 200ms; no-capacity state; unassigned/unsized counts.
-  - Surfaced by: Test review — coverage diagram (0/27 paths tested)
+- [ ] **T5b (P1, human: ~1.5d / CC: ~2h)** — Forge config page — Implement the Forge `jira:appSettings` config surface per the Config Page Design section. Three-section ADS Form: Access Control (ADS UserPicker for `editorAccountIds`, searching by display name via `/rest/api/3/user/search`), Planning Defaults (`defaultThreshold` NumberField, `untaggedIdeaStatuses` multi-select), T-shirt Scale (five NumberFields in a row). Skeleton loading state; inline save success/error flag; fresh-install yellow banner when `editorAccountIds=[]`. Site-admin only. Required for launch.
+  - Surfaced by: Outside Voice — D4 (no config page task); Design Review D5/D5a (full config page spec + user picker)
+  - Files: `src/ui/ConfigPage.tsx`, `manifest.yml` (add config surface)
+  - Verify: Site admin can set editorAccountIds by name search; non-admin cannot access; fresh-install banner appears; config-page.e2e.ts passes
+
+- [ ] **T6 (P2, human: ~2d / CC: ~2h)** — WaterlineChart React component — Green/amber/red colour states using ADS color tokens; client-side recolour < 200ms; no-capacity state; unassigned/unsized counts; **total bar** (fifth bar, visually separated, spec P8); **skeleton loading state** (grey placeholder bars during `getAll()` in flight); **state label at bar base** ("OK" / "FILLING" / "OVER") as color-blind accessible secondary indicator (D9).
+  - Surfaced by: Test review — coverage diagram (0/27 paths tested); Design Review D2 (total bar)
   - Files: `src/ui/WaterlineChart.tsx`
-  - Verify: Vitest component tests for all colour states
+  - Verify: Vitest component tests for all colour states including total bar; total bar recolours when any team changes
 
 - [ ] **T7 (P2, human: ~1d / CC: ~1h)** — Capacity editor — Save button, dirty-check state, persistent inline unsaved-changes banner (replaces beforeunload which doesn't fire on SPA navigation).
   - Surfaced by: Architecture — D3/D6 (SPA navigation gap)
@@ -416,15 +508,20 @@ Synthesized from this review's findings. Run with Claude Code; checkbox as you s
   - Files: `src/resolvers/reassignIdea.ts`, `src/ui/IdeaList.tsx`
   - Verify: Vitest unit test for happy path + Jira failure + revert
 
-- [ ] **T10 (P3, human: ~1d / CC: ~1h)** — Vitest unit tests — All resolver functions + WaterlineChart + CapacityEditor.
-  - Surfaced by: Test review — D5 (Vitest selected), 27 gaps identified
+- [ ] **T10 (P3, human: ~1d / CC: ~1h)** — Vitest unit tests — All resolver functions + WaterlineChart + CapacityEditor + IdeaList. Includes: untagged banner fires/hides based on `config.untaggedIdeaStatuses` (3 paths from D1); double-reassign in-flight guard in IdeaList; fieldKeys.ts smoke test.
+  - Surfaced by: Test review — D5 (Vitest selected), 27 gaps + D1/D2 new paths
   - Files: `test/resolvers/*.test.ts`, `test/ui/*.test.tsx`
   - Verify: `vitest run` passes, 100% resolver branch coverage
 
-- [ ] **T11 (P3, human: ~1d / CC: ~2h)** — Playwright E2E — plan-release, reassign-idea, unsaved-guard, read-only-view, first-use flows.
-  - Surfaced by: Test review — 5 E2E flows identified
+- [ ] **T11 (P3, human: ~1.5d / CC: ~2h)** — Playwright E2E — plan-release, reassign-idea, unsaved-guard (with data-loss validation: enter capacity → navigate away → return → verify not persisted), read-only-view, first-use, config-page flows.
+  - Surfaced by: Test review — 6 E2E flows (added config-page and data-loss scenario per D3/D4)
   - Files: `e2e/*.e2e.ts`, `playwright.config.ts`
   - Verify: `playwright test` passes against Jira developer instance
+
+- [ ] **T12 (P2, human: ~1h / CC: ~10min)** — Session persistence — Persist last-selected version ID to `localStorage` key `cpw:lastVersionId` on version selection. On page open, if the stored version ID is found in the version list, restore the selection and trigger `getAll()` immediately; if not found (archived version), fall back to "Select a version to begin" prompt. Eliminates cold-start friction for the DM opening the app at the start of a planning meeting.
+  - Surfaced by: Design Review D6 (journey — cold-start at meeting time)
+  - Files: `src/ui/App.tsx`, `src/ui/VersionPicker.tsx`
+  - Verify: Close and reopen app → previously selected version loads automatically; archived version gracefully falls back to picker prompt
 
 ---
 
@@ -434,10 +531,12 @@ Synthesized from this review's findings. Run with Claude Code; checkbox as you s
 | --- | --- | --- | --- | --- | --- |
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
 | Codex Review | `/codex review` | Independent 2nd opinion | 0 | — | — |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 9 decisions, 0 critical gaps |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 2 | CLEAR | run 1: 9 decisions; run 2: 6 decisions, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 1 | CLEAR | score: 3/10 → 8/10, 11 decisions |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 
-**VERDICT:** ENG CLEARED — ready to implement. Run Spike #1a and Spike #2 in parallel first.
+**OUTSIDE VOICE (eng run 2):** 5 findings from Claude subagent — 3 accepted (config page gap T5b, Teams API hard gate, ROAD fixVersion check), 1 rejected (banner-as-guard naming — acknowledged limitation, correct behavior), 1 skipped (per-team T-shirt scale — premature for v1).
+
+**VERDICT:** ENG + DESIGN CLEARED — ready to implement. Run Spike #1a and Spike #2 in parallel first.
 
 NO UNRESOLVED DECISIONS
