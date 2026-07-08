@@ -1,0 +1,25 @@
+{
+  "identity": {},
+  "declared": {},
+  "inferred": {
+    "values": {
+      "scope_appetite": 0.5,
+      "risk_tolerance": 0.5,
+      "detail_preference": 0.5,
+      "autonomy": 0.5,
+      "architecture_care": 0.5
+    },
+    "sample_size": 7,
+    "diversity": {
+      "skills_covered": 1,
+      "question_ids_covered": 7,
+      "days_span": 1
+    }
+  },
+  "gap": {},
+  "overrides": {},
+  "sessions": [],
+  "signals_accumulated": {},
+  "schema_version": 1,
+  "derived_at": "2026-07-05T23:08:58.968Z"
+}

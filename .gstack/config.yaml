@@ -1,0 +1,87 @@
+# gstack configuration — edit freely, changes take effect on next skill run.
+# Docs: https://github.com/garrytan/gstack
+#
+# ─── Behavior ────────────────────────────────────────────────────────
+# proactive: true           # Auto-invoke skills when your request matches one.
+#                           # Set to false to only run skills you type explicitly.
+#
+# routing_declined: false   # Set to true to skip the CLAUDE.md routing injection
+#                           # prompt. Set back to false to be asked again.
+#
+# ─── Telemetry ───────────────────────────────────────────────────────
+# telemetry: off            # off | anonymous | community
+#                           #   off       — no data sent, no local analytics (default)
+#                           #   anonymous — counter only, no device ID
+#                           #   community — usage data + stable device ID
+#
+# ─── Updates ─────────────────────────────────────────────────────────
+# auto_upgrade: false       # true = silently upgrade on session start
+# update_check: true        # false = suppress version check notifications
+#
+# ─── Skill naming ────────────────────────────────────────────────────
+# skill_prefix: false       # true = namespace skills as /gstack-qa, /gstack-ship
+#                           # false = short names /qa, /ship
+#
+# ─── Checkpoint ──────────────────────────────────────────────────────
+# checkpoint_mode: explicit # explicit | continuous
+#                           #   explicit   — commit only when you run /ship or /checkpoint
+#                           #   continuous — auto-commit after each significant change
+#                           #                with WIP: prefix + [gstack-context] body
+#
+# checkpoint_push: false    # true = push WIP commits to remote as you go
+#                           # false = keep WIP commits local only (default)
+#                           # Pushing can trigger CI/deploy hooks — opt in carefully.
+#
+# ─── Writing style (V1) ──────────────────────────────────────────────
+# explain_level: default    # default = jargon-glossed, outcome-framed prose
+#                           #           (V1 default — more accessible for everyone)
+#                           # terse   = V0 prose style, no glosses, no outcome-framing layer
+#                           #           (for power users who know the terms)
+#                           # Unknown values default to "default" with a warning.
+#                           # See docs/designs/PLAN_TUNING_V1.md for rationale.
+#
+# ─── Artifacts sync (renamed from gbrain_sync_mode in v1.27.0.0) ─────
+# artifacts_sync_mode: off  # off | artifacts-only | full
+#                           #   off            — no sync (default)
+#                           #   artifacts-only — sync plans/designs/retros/learnings only
+#                           #                    (skip behavioral data: question-log,
+#                           #                    developer-profile, timeline)
+#                           #   full           — sync everything allowlisted
+#                           # Set by the first-run privacy stop-gate. See docs/gbrain-sync.md.
+#
+# artifacts_sync_mode_prompted: false
+#                           # Set to true once the privacy gate has asked the user.
+#                           # Flip back to false to be re-prompted.
+#
+# ─── Plan-tune hooks ─────────────────────────────────────────────────
+# plan_tune_hooks: prompt   # Controls whether ./setup installs the plan-tune
+#                           #   Claude Code hooks (PostToolUse capture +
+#                           #   PreToolUse preference enforcement).
+#                           #   prompt — ask on a real TTY, skip otherwise (default)
+#                           #   yes    — install non-interactively
+#                           #   no     — skip non-interactively
+#                           # Override per-run: ./setup --plan-tune-hooks /
+#                           #   --no-plan-tune-hooks, or env GSTACK_PLAN_TUNE_HOOKS.
+#
+# ─── Advanced ────────────────────────────────────────────────────────
+# codex_reviews: enabled    # Master switch for Codex cross-model review. enabled =
+#                           #   Codex runs as a standard step in /review, /ship,
+#                           #   /document-release, plan reviews, and /autoplan (auto
+#                           #   falls back to a Claude subagent if Codex is missing or
+#                           #   not authenticated). disabled = skip all Codex passes.
+#                           #   Asymmetry on disabled: diff-review (/review, /ship) still
+#                           #   runs the free Claude adversarial subagent; plan-review and
+#                           #   /document-release skip the outside-voice step entirely.
+#                           #   An invalid value is REJECTED (existing value preserved) so
+#                           #   a typo cannot silently turn paid Codex calls on or off.
+# gstack_contributor: false # true = file field reports when gstack misbehaves
+# skip_eng_review: false    # true = skip eng review gate in /ship (not recommended)
+#
+# ─── Workspace-aware ship ────────────────────────────────────────────
+# workspace_root: $HOME/conductor/workspaces  # Where /ship looks for sibling
+#                           # Conductor worktrees when picking a VERSION slot.
+#                           # Set to "null" to disable sibling scanning entirely.
+#                           # Non-Conductor users can point this at any directory
+#                           # that holds parallel worktrees of the same repo.
+#
+cross_project_learnings: false
