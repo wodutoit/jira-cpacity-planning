@@ -6,6 +6,9 @@
     "allow": [
       "Bash(forge lint *)",
       "Bash(forge deploy *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Dev\\github_projects\\jira-cpacity-planning\\.claude"
     ]
   },
   "hooks": {

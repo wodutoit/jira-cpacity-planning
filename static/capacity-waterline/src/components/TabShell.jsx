@@ -4,86 +4,66 @@ import ReleasePlanningTab from '../tabs/ReleasePlanningTab';
 import ConfigTab from '../tabs/ConfigTab';
 import JiraTab from '../tabs/JiraTab';
 
-const TABS = [
-  { id: 'intake', label: 'Intake', component: IntakeTab },
-  { id: 'release-planning', label: 'Release Planning', component: ReleasePlanningTab },
-  { id: 'config', label: 'Config', component: ConfigTab },
-  { id: 'jira', label: 'Jira', component: JiraTab },
+const ALL_TABS = [
+  { id: 'intake', label: 'Intake', component: IntakeTab, adminOnly: false },
+  { id: 'release-planning', label: 'Release Planning', component: ReleasePlanningTab, adminOnly: false },
+  { id: 'config', label: 'Config', component: ConfigTab, adminOnly: true },
+  { id: 'jira', label: 'Jira', component: JiraTab, adminOnly: true },
 ];
 
-const styles = {
-  root: {
-    minHeight: '100vh',
-    background: '#F4F5F7',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-  },
-  header: {
-    display: 'flex',
-    alignItems: 'center',
-    borderBottom: '2px solid #DFE1E6',
-    background: '#fff',
-    padding: '0 24px',
-    height: 44,
-  },
-  wordmark: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    marginRight: 24,
-    fontWeight: 700,
-    fontSize: 14,
-    color: '#172B4D',
-    flexShrink: 0,
-  },
-  badge: {
-    background: '#0052CC',
-    color: '#fff',
-    borderRadius: 4,
-    padding: '2px 7px',
-    fontSize: 12,
-    fontWeight: 700,
-  },
-  tabButton: (active) => ({
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    padding: '0 16px',
-    height: 44,
-    fontSize: 14,
-    color: active ? '#0052CC' : '#42526E',
-    fontWeight: active ? 600 : 400,
-    borderBottom: active ? '2px solid #0052CC' : '2px solid transparent',
-    marginBottom: -2,
-    transition: 'color 0.1s',
-  }),
-  content: {
-    padding: 24,
-  },
-};
+function isAdmin(config, currentAccountId) {
+  const admins = config?.admins ?? [];
+  // Empty list → everyone is admin
+  if (!admins.length) return true;
+  return admins.some(a => a.accountId === currentAccountId);
+}
 
-export default function TabShell({ initialData }) {
-  const [activeTab, setActiveTab] = useState('release-planning');
+export default function TabShell({ initialData, onRefresh, refreshing }) {
+  const admin = isAdmin(initialData?.config, initialData?.currentUser?.accountId);
+  const tabs = ALL_TABS.filter(t => !t.adminOnly || admin);
 
-  const ActiveComponent = TABS.find((t) => t.id === activeTab)?.component;
+  const [activeTab, setActiveTab] = useState('intake');
+
+  // If active tab became hidden (e.g. admin rights removed), fall back
+  const visibleIds = new Set(tabs.map(t => t.id));
+  const safeActive = visibleIds.has(activeTab) ? activeTab : tabs[0]?.id;
+
+  const ActiveComponent = tabs.find(t => t.id === safeActive)?.component;
 
   return (
-    <div style={styles.root}>
-      <header style={styles.header}>
-        <div style={styles.wordmark}>
-          <span style={styles.badge}>W</span>
+    <div className="app">
+      <header className="app-header">
+        <div className="app-wordmark">
+          <span className="app-badge">W</span>
           Capacity Waterline
         </div>
-        {TABS.map((tab) => (
+        {tabs.map(tab => (
           <button
             key={tab.id}
+            className={`tab-btn${safeActive === tab.id ? ' active' : ''}`}
             onClick={() => setActiveTab(tab.id)}
-            style={styles.tabButton(activeTab === tab.id)}
           >
             {tab.label}
           </button>
         ))}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+          {!admin && <span style={{ fontSize: 12, color: '#97A0AF' }}>Read-only</span>}
+          <button
+            onClick={onRefresh}
+            disabled={refreshing}
+            style={{
+              background: 'none', border: 'none', cursor: refreshing ? 'default' : 'pointer',
+              color: refreshing ? '#97A0AF' : '#6B778C', fontSize: 13, padding: '0 8px',
+              display: 'flex', alignItems: 'center', gap: 4,
+            }}
+            title="Reload data from Jira"
+          >
+            <span style={{ display: 'inline-block', animation: refreshing ? 'btn-rotate .8s linear infinite' : 'none' }}>↻</span>
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
       </header>
-      <main style={styles.content}>
+      <main className="tab-content">
         {ActiveComponent && <ActiveComponent data={initialData} />}
       </main>
     </div>
