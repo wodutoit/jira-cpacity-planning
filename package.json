@@ -1,0 +1,11 @@
+{
+  "name": "capacity-waterline",
+  "version": "1.0.0",
+  "description": "Atlassian Forge resolver for Capacity Waterline",
+  "main": "src/index.js",
+  "license": "ISC",
+  "dependencies": {
+    "@forge/api": "^11.0.0",
+    "@forge/resolver": "^2.0.0"
+  }
+}

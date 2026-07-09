@@ -1,0 +1,31 @@
+{
+  "name": "capacity-waterline-ui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@atlaskit/banner": "^12.0.0",
+    "@atlaskit/button": "^20.0.0",
+    "@atlaskit/dynamic-table": "^9.0.0",
+    "@atlaskit/form": "^10.0.0",
+    "@atlaskit/lozenge": "^12.0.0",
+    "@atlaskit/section-message": "^6.0.0",
+    "@atlaskit/select": "^18.0.0",
+    "@atlaskit/spinner": "^16.0.0",
+    "@atlaskit/tabs": "^14.0.0",
+    "@atlaskit/textfield": "^6.0.0",
+    "@atlaskit/tokens": "^2.0.0",
+    "@forge/bridge": "^4.0.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "vite": "^5.0.0"
+  }
+}

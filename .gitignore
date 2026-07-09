@@ -1,0 +1,6 @@
+node_modules/
+static/capacity-waterline/node_modules/
+static/capacity-waterline/build/
+.forge/
+*.log
+.env
