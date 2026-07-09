@@ -4,7 +4,7 @@
 | --- | --- |
 | Status | Draft v0.1 — for review |
 | Platform | Atlassian Forge (cloud-native, Atlassian-hosted) |
-| Instance | sterlandsupport.atlassian.net (Cloud ID `27fae7eb-3b1d-4aa0-9a87-d8a37082592e`) |
+| Instance | prediktivity.atlassian.net (prediktivity.atlassian.net) |
 | Author | DM + Claude |
 | Purpose | Close the gap between JPD (ideas/prioritisation) and Plans (delivery scheduling) with a release-level and sprint-level capacity waterline |
 

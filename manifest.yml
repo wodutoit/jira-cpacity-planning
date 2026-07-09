@@ -5,15 +5,9 @@ modules:
       resolver:
         function: resolver
       title: Capacity Waterline
-  jira:appSettings:
-    - key: capacity-waterline-settings
-      resource: main
-      resolver:
-        function: resolver
-      title: Capacity Waterline — Settings
   function:
     - key: resolver
-      handler: src/index.handler
+      handler: index.handler
 
 resources:
   - key: main
@@ -21,24 +15,20 @@ resources:
 
 permissions:
   scopes:
-    # Jira core — read ideas (issues), projects, versions, fields, statuses
     - read:jira-work
-    # Jira users — read account IDs for the editor access-control picker
     - read:jira-user
-    # Jira write — create/update issues during Delivery → Convert phase
     - write:jira-work
-    # Agile boards — read boards for team→space mapping
+    - read:issue:jira
+    - read:project:jira
+    - read:issue-type:jira
+    - read:field:jira
+    - write:issue:jira
     - read:board-scope:jira-software
-    # Sprints — read sprints per team board (Delivery mode)
     - read:sprint:jira-software
-    # Sprints write — create/edit sprints in Delivery mode
     - write:sprint:jira-software
-    # Teams API scope — TBC in Spike #2 (/rest/teams/1.0/teams/ accessibility)
-    # Placeholder; may need read:team:jira or is covered by read:jira-user
+    - storage:app
 
 app:
-  # Replace with real ID after: forge register
-  id: ari:cloud:ecosystem::app/REPLACE-AFTER-FORGE-REGISTER
-  name: Capacity Waterline
+  id: ari:cloud:ecosystem::app/283baa0a-a9b2-4a43-b17b-2e008d27dc92
   runtime:
     name: nodejs22.x

@@ -20,6 +20,7 @@ export default function App() {
       })
       .catch((err) => setError(String(err)))
       .finally(() => setLoading(false));
+
   }, []);
 
   if (loading) {

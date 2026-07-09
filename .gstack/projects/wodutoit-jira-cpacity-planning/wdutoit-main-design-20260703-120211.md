@@ -20,7 +20,7 @@ is either a JPD idea or a ROAD item (see ROAD definition below). After migration
 ideas are JPD ideas. The T-shirt size and team assignment live on the idea; the Jira Version link
 connects it to a release.
 
-**ROAD:** The current custom Jira project (key: to be confirmed on sterlandsupport.atlassian.net)
+**ROAD:** The current custom Jira project (key: to be confirmed on prediktivity.atlassian.net)
 used for high-level planning before JPD adoption. ROAD items are standard Jira issues. The app
 reads their T-shirt size from the custom field used today for sizing (field key to be confirmed
 during the JPD spike in The Assignment). After full JPD migration, ROAD items will no longer
@@ -86,7 +86,7 @@ T-shirt sized ideas, a visible threshold line — open during a planning meeting
 - Platform: Atlassian Forge (cloud-native; data stays in Atlassian cloud).
 - **Component library: Atlassian Design System 3 (`@atlaskit/*`).** Use ADS color tokens for all colours (success, warning, danger, neutral); ADS components for all form fields, buttons, banners, lozenges, tables, and pickers. The waterline bars are custom SVG/canvas elements but use ADS color tokens. Do not import a second component library alongside Atlaskit.
 - **Forge app surface:** `jira:globalPage` (top-level Jira navigation). Cross-team releases span multiple projects; a project-scoped page would require opening a separate instance per team.
-- Instance: sterlandsupport.atlassian.net (Cloud ID 27fae7eb-3b1d-4aa0-9a87-d8a37082592e).
+- Instance: prediktivity.atlassian.net (prediktivity.atlassian.net).
 - JPD adoption is in progress — planning mode must work with both ROAD items and JPD ideas during the transition (see Glossary — ROAD).
 - **Teams are read from Jira Teams API** (`/rest/teams/1.0/teams/`) on page load — not stored in Forge Storage. No custom team admin page in v1. Jira Teams API accessibility is a **hard gate** in Spike #2: if the API is not accessible from a Forge resolver, the app does not ship until this is resolved. `teamId` used as the storage key in per-release capacity records refers to the Jira Teams ID.
 - Jira Version is the anchor object for a release. Version tagging discipline is being enforced as part of this rollout. The warning banner covers partial tagging at runtime.
@@ -233,11 +233,11 @@ sequence rather than in parallel reduces risk.
 
 ## Open Questions
 
-1. **JPD T-shirt field key:** What Jira/JPD field stores the T-shirt size on ideas on sterlandsupport.atlassian.net? What is its API field key? (Resolved by Spike #2 — see The Assignment.)
+1. **JPD T-shirt field key:** What Jira/JPD field stores the T-shirt size on ideas on prediktivity.atlassian.net? What is its API field key? (Resolved by Spike #2 — see The Assignment.)
 
-2. **ROAD project key and sizing field:** What is the project key for ROAD items on sterlandsupport.atlassian.net? What custom field holds T-shirt size on ROAD items today? (Resolved by Spike #2.)
+2. **ROAD project key and sizing field:** What is the project key for ROAD items on prediktivity.atlassian.net? What custom field holds T-shirt size on ROAD items today? (Resolved by Spike #2.)
 
-3. **Version tagging baseline:** What percentage of in-flight ideas/issues are currently tagged to a Jira Version on sterlandsupport.atlassian.net? Measure before launch to set expectations and calibrate the warning banner threshold.
+3. **Version tagging baseline:** What percentage of in-flight ideas/issues are currently tagged to a Jira Version on prediktivity.atlassian.net? Measure before launch to set expectations and calibrate the warning banner threshold.
 
 4. **Sprint-to-board data model for delivery mode:** Delivery mode requires linking sprints from multiple team boards to a single release. The Jira API has no "version → sprints" endpoint. A manual mapping (DM curates sprint-to-release assignments in Forge Storage) is the likely solution. This must be designed before delivery mode implementation begins. (Blocked until planning mode ships.)
 
@@ -261,7 +261,7 @@ sequence rather than in parallel reduces risk.
 
 ## Distribution Plan
 
-- Deployed as a Forge app to sterlandsupport.atlassian.net via `forge deploy` (Forge CLI).
+- Deployed as a Forge app to prediktivity.atlassian.net via `forge deploy` (Forge CLI).
 - Updates pushed without user action (Forge-managed hosting).
 - No Atlassian Marketplace listing required for an internal installation.
 - CI/CD: manual `forge deploy` on merge to main initially; GitHub Actions pipeline can be added
@@ -271,7 +271,7 @@ sequence rather than in parallel reduces risk.
 
 ## Dependencies
 
-- Atlassian Forge CLI set up and authenticated against sterlandsupport.atlassian.net.
+- Atlassian Forge CLI set up and authenticated against prediktivity.atlassian.net.
 - JPD enabled on the instance (in progress).
 - Jira Version tagging enforcement underway (prerequisite for waterline data quality).
 - ROAD project key and sizing field key confirmed (prerequisite for transition-period support).
@@ -294,7 +294,7 @@ Build one Forge Custom UI page (globalPage surface) that:
 2. Returns one merged payload to the React frontend.
 3. Renders a bar chart (one bar per team, story points summed) with a hardcoded capacity line.
 
-Use a real Jira Version from sterlandsupport with representative volume (not an empty version).
+Use a real Jira Version from prediktivity with representative volume (not an empty version).
 
 **Pass criteria:** (a) page-open-to-chart < 1.5 seconds; (b) client-side recolour after a simulated prop change < 200 ms.
 
@@ -456,7 +456,7 @@ Synthesized from this review's findings. Run with Claude Code; checkbox as you s
 - [ ] **T1 (P1, human: ~2h / CC: ~20min)** — Forge manifest — Create `manifest.yml` with `jira:globalPage` surface and draft scopes (`read:jira-data`, `write:jira-work`, `storage:app`, `read:jira-user`). Required before Spike #1a can deploy.
   - Surfaced by: Architecture — D1 (globalPage) + D2 (draft scopes now)
   - Files: `manifest.yml`
-  - Verify: `forge deploy` succeeds on sterlandsupport
+  - Verify: `forge deploy` succeeds on prediktivity
 
 - [ ] **T2 (P1, human: ~1d / CC: ~1h)** — Spike #1a — Read latency probe with real Jira Version, paginated child fetch, Jira Teams API, single bridge hop.
   - Surfaced by: Architecture — Design Risk (bridge latency) + D7 (split spike)

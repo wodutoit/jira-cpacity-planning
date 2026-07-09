@@ -2,6 +2,12 @@
   "env": {
     "GSTACK_HOME": "c:\\Dev\\github_projects\\jira-cpacity-planning\\.gstack"
   },
+  "permissions": {
+    "allow": [
+      "Bash(forge lint *)",
+      "Bash(forge deploy *)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
