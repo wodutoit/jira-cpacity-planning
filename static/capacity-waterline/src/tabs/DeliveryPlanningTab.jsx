@@ -937,24 +937,505 @@ const SEL_STYLE_SM = {
   cursor: 'pointer', color: 'var(--text)', outline: 'none', width: '100%',
 };
 
-// ── Stage stubs ──────────────────────────────────────────────────────────────
-function StageStub({ number, label, description, bullets }) {
+const BAND_COLORS = {
+  ok: { fill: 'var(--ok)', bg: 'var(--ok-bg)', text: 'var(--ok-text)', border: 'var(--ok-border)' },
+  filling: { fill: 'var(--filling)', bg: 'var(--filling-bg)', text: 'var(--filling-text)', border: 'var(--filling-border)' },
+  over: { fill: 'var(--over)', bg: 'var(--over-bg)', text: 'var(--over-text)', border: 'var(--over-border)' },
+  nocap: { fill: 'var(--border)', bg: 'transparent', text: 'var(--text-subtlest)', border: 'var(--border)' },
+};
+
+// ── Reconcile stage ────────────────────────────────────────────────────────────
+// Pure read-only report: planned (idea points) vs actual (points captured at
+// conversion time) per team. No Jira calls, matching the prototype exactly — it
+// deliberately compares against the conversion-time estimate, not a live re-sum
+// of story points, so "actual" never drifts out from under a user's own record.
+function driftBand(pct) {
+  const a = Math.abs(pct);
+  return a <= 10 ? 'ok' : a <= 25 ? 'filling' : 'over';
+}
+
+function ReconcileStage({ ideas, teams, versionId, conversion }) {
+  const curIdeas = ideas.filter(i => i.release === versionId);
+  const convDoneCount = curIdeas.filter(i => conversion[i.key]?.status === 'converted').length;
+  const reconEmpty = convDoneCount === 0;
+
+  const reconData = teams.map(t => {
+    const ti = curIdeas.filter(i => i.team === t.id);
+    const planned = ti.reduce((a, i) => a + (i.size ?? 0), 0);
+    const conv = ti.filter(i => conversion[i.key]?.status === 'converted');
+    const converted = conv.length > 0;
+    const actual = converted
+      ? conv.reduce((a, i) => a + (conversion[i.key]?.pts != null ? conversion[i.key].pts : (i.size ?? 0)), 0)
+      : null;
+    return { team: t, planned, actual, converted };
+  });
+
+  const reconMax = Math.max(1, ...reconData.map(r => r.planned), ...reconData.map(r => r.actual ?? 0)) * 1.05;
+
+  const reconRows = reconData.map(r => {
+    const drift = r.converted ? r.actual - r.planned : null;
+    const pct = !r.converted ? null : (r.planned ? Math.round(drift / r.planned * 100) : 100);
+    const band = r.converted ? driftBand(pct) : 'nocap';
+    const glyph = !r.converted ? '' : (Math.abs(pct) <= 10 ? '≈' : (drift > 0 ? '▲' : '▼'));
+    const driftText = !r.converted ? '—' : `${drift > 0 ? '+' : ''}${drift}`;
+    const pctText = !r.converted ? '' : `${glyph} ${pct > 0 ? '+' : ''}${pct}%`;
+    const stateText = !r.converted ? 'not yet converted' : (Math.abs(pct) <= 10 ? 'on track' : (drift > 0 ? 'over-running' : 'under'));
+    return { ...r, drift, pct, band, driftText, pctText, stateText, colors: BAND_COLORS[band] };
+  });
+
+  const rPlanned = reconData.reduce((a, r) => a + r.planned, 0);
+  const rActual = reconData.reduce((a, r) => a + (r.actual ?? 0), 0);
+  const rUnconv = reconData.filter(r => !r.converted).length;
+
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '32px 28px', maxWidth: 680 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-        <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'var(--surface-sunken)', border: '1px solid var(--border)', color: 'var(--text-subtle)', fontSize: 13, fontWeight: 800, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>{number}</div>
-        <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>{label}</span>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 4, background: 'var(--lz-n-bg)', color: 'var(--lz-n-text)' }}>Coming soon</span>
+    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Reconciliation — planned vs actual</div>
+        <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 2 }}>
+          Idea T-shirt sizes vs converted story estimates, per team. Drift bands: ±10% on track · ±10–25% moderate · &gt;25% large.
+        </div>
       </div>
-      <p style={{ fontSize: 13, color: 'var(--text-subtle)', lineHeight: 1.6, margin: '0 0 16px' }}>{description}</p>
-      <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {bullets.map(b => (
-          <li key={b} style={{ display: 'flex', gap: 8, fontSize: 13, color: 'var(--text-subtle)', lineHeight: 1.4 }}>
-            <span style={{ color: 'var(--border)' }}>○</span>{b}
-          </li>
-        ))}
-      </ul>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: 'var(--surface-sunken)', borderBottom: '1px solid var(--border)', fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--text-subtlest)' }}>
+        <div style={{ width: 140 }}>Team</div>
+        <div style={{ flex: 1 }}>Planned (T-shirt)</div>
+        <div style={{ flex: 1 }}>Actual (stories)</div>
+        <div style={{ width: 130 }}>Drift</div>
+      </div>
+
+      {reconEmpty && (
+        <div style={{ margin: '12px 16px 0', fontSize: 12, color: 'var(--filling-text)', background: 'var(--filling-bg)', border: '1px solid var(--filling-border)', borderRadius: 6, padding: '10px 12px' }}>
+          Convert ideas to stories to compare planned vs actual. Planned is shown below; actual fills in as you convert.
+        </div>
+      )}
+
+      {reconRows.map(r => (
+        <div key={r.team.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ width: 140, fontSize: 13, fontWeight: 600, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.team.name}</div>
+          <div style={{ flex: 1 }}>
+            <div style={{ height: 8, borderRadius: 4, background: 'var(--surface-sunken)', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${Math.min(100, r.planned / reconMax * 100)}%`, background: 'var(--text-subtlest)', opacity: 0.5 }} />
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>{r.planned} pts</div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ height: 8, borderRadius: 4, background: 'var(--surface-sunken)', overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: r.converted ? `${Math.min(100, r.actual / reconMax * 100)}%` : '0%', background: r.colors.fill }} />
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>{r.converted ? `${r.actual} pts` : '—'}</div>
+          </div>
+          <div style={{ width: 130 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: r.colors.text, fontVariantNumeric: 'tabular-nums' }}>
+              {r.driftText}{r.pctText && <span style={{ marginLeft: 6, fontWeight: 600 }}>{r.pctText}</span>}
+            </div>
+            <span style={{ display: 'inline-block', marginTop: 4, fontSize: 10, fontWeight: 700, letterSpacing: '.3px', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 4, background: r.converted ? r.colors.bg : 'var(--lz-n-bg)', color: r.converted ? r.colors.text : 'var(--lz-n-text)' }}>
+              {r.stateText}
+            </span>
+          </div>
+        </div>
+      ))}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: 'var(--surface-sunken)', borderTop: '1px solid var(--border)' }}>
+        <div style={{ width: 140, fontSize: 13, fontWeight: 800, color: 'var(--text)' }}>Release</div>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 700, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{rPlanned} pts</div>
+        <div style={{ flex: 1, fontSize: 13, fontWeight: 700, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>
+          {rActual} pts <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-subtlest)' }}>of converted</span>
+        </div>
+        <div style={{ width: 130 }} />
+      </div>
+      {rUnconv > 0 && (
+        <div style={{ padding: '8px 16px', fontSize: 11, color: 'var(--text-subtlest)' }}>
+          {rUnconv} team{rUnconv !== 1 ? 's' : ''} not yet converted — excluded from the release actual total.
+        </div>
+      )}
     </div>
+  );
+}
+
+const STATE_LABEL = { ok: 'OK', filling: 'FILLING', over: 'OVER', nocap: 'NO CAP' };
+
+function dStateOf(alloc, cap, threshold) {
+  if (!cap) return 'nocap';
+  const pct = alloc / cap * 100;
+  return pct > 100 ? 'over' : (pct > threshold ? 'filling' : 'ok');
+}
+
+// ── Waterline: grid cell ───────────────────────────────────────────────────────
+function WaterlineCell({ active, alloc, cap, hasOverride, threshold, clickable, onClick }) {
+  if (!active) {
+    return (
+      <div style={{ minHeight: 60, borderRadius: 6, border: '1px dashed var(--border)', background: 'repeating-linear-gradient(45deg, var(--surface-sunken), var(--surface-sunken) 4px, var(--surface) 4px, var(--surface) 8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: 'var(--text-subtlest)' }}>n/a</div>
+    );
+  }
+  const state = dStateOf(alloc, cap, threshold);
+  const colors = BAND_COLORS[state];
+  const pct = cap ? Math.min(100, alloc / cap * 100) : 0;
+  const showLabel = state === 'filling' || state === 'over';
+  return (
+    <div
+      onClick={clickable ? onClick : undefined}
+      style={{
+        minHeight: 60, padding: '8px 10px', borderRadius: 6, border: '1px solid var(--border)',
+        background: 'var(--surface)', display: 'flex', flexDirection: 'column', gap: 6,
+        cursor: clickable ? 'pointer' : 'default',
+      }}
+    >
+      {showLabel && (
+        <span style={{ alignSelf: 'flex-start', fontSize: 9, fontWeight: 800, letterSpacing: '.3px', padding: '1px 6px', borderRadius: 3, background: colors.bg, color: colors.text }}>
+          {STATE_LABEL[state]}
+        </span>
+      )}
+      <div style={{ height: 7, borderRadius: 4, background: 'var(--surface-sunken)', overflow: 'hidden', position: 'relative' }}>
+        <div style={{ position: 'absolute', inset: 0, width: `${pct}%`, background: colors.fill }} />
+      </div>
+      <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>
+        {alloc}/{cap}{hasOverride ? ' ◆' : ''}
+      </div>
+    </div>
+  );
+}
+
+// ── Waterline: cell drawer (work items in one team/sprint) ───────────────────────
+function WaterlineDrawer({
+  team, sprint, alloc, cap, threshold, items, ideaById, moveMenuFor, moveSaving, moveError,
+  sprintDests, teamDests, smoothing, onMoveMenu, onMove, onClose,
+}) {
+  const state = dStateOf(alloc, cap, threshold);
+  const colors = BAND_COLORS[state];
+  const overBy = alloc - cap;
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(9,30,66,0.42)', zIndex: 120, display: 'flex', justifyContent: 'flex-end' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', width: 420, maxWidth: '100%', height: '100%', overflowY: 'auto', padding: 22, boxShadow: '-8px 0 24px rgba(0,0,0,.2)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)' }}>{team?.name} · Sprint {sprint?.name}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 2 }}>{fmtDate(sprint?.startDate)} – {fmtDate(sprint?.endDate)}</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', fontSize: 18, color: 'var(--text-subtlest)', cursor: 'pointer', lineHeight: 1 }}>×</button>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.3px', padding: '2px 8px', borderRadius: 4, background: colors.bg, color: colors.text }}>{STATE_LABEL[state]}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{alloc} / {cap} pts</span>
+        </div>
+
+        {state === 'over' && smoothing.length > 0 && (
+          <div style={{ marginTop: 14, background: 'var(--over-bg)', border: '1px solid var(--over-border)', borderRadius: 6, padding: '10px 12px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--over-text)' }}>⇄ Over by {overBy} pts — cells with headroom</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+              {smoothing.map(s => (
+                <div key={s.label} style={{ fontSize: 12, color: 'var(--over-text)' }}>{s.label} — {s.free} free</div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {items.length === 0 ? (
+            <div style={{ fontSize: 13, color: 'var(--text-subtlest)', textAlign: 'center', padding: '24px 0' }}>No work items in this sprint.</div>
+          ) : items.map(it => {
+            const idea = it.ideaKey ? ideaById[it.ideaKey] : null;
+            return (
+              <div key={it.key} style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px', background: idea ? 'rgba(124,92,246,0.07)' : 'var(--surface)' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
+                      <span style={{ fontFamily: 'ui-monospace,monospace', color: 'var(--text-subtle)' }}>{it.key}</span> {it.title}
+                    </div>
+                    {idea && <div style={{ fontSize: 11, color: '#6D4BD8', marginTop: 2 }}>★ {idea.title}</div>}
+                    <div style={{ fontSize: 11, color: 'var(--text-subtlest)', marginTop: 2 }}>{it.status} · {it.estimate || 0} pts{!it.estimate ? ' (unpointed)' : ''}</div>
+                  </div>
+                  <button onClick={() => onMoveMenu(it.key)} disabled={moveSaving}
+                    style={{ flexShrink: 0, background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 9px', fontSize: 11, fontWeight: 700, color: 'var(--text-subtle)', cursor: moveSaving ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                    Move ▾
+                  </button>
+                </div>
+                {moveMenuFor === it.key && (
+                  <div style={{ marginTop: 10, borderTop: '1px solid var(--border-subtle)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {sprintDests.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.3px', textTransform: 'uppercase', color: 'var(--text-subtlest)', marginBottom: 4 }}>Move to sprint (same team)</div>
+                        {sprintDests.map(d => (
+                          <button key={d.sprintId} onClick={() => onMove(it.key, team.id, d.sprintId)} disabled={moveSaving}
+                            style={{ display: 'block', width: '100%', textAlign: 'left', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '6px 9px', fontSize: 12, color: 'var(--text)', cursor: moveSaving ? 'default' : 'pointer', fontFamily: 'inherit', marginBottom: 4 }}>
+                            {d.name} · {STATE_LABEL[d.state]} · {d.alloc}/{d.cap}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {teamDests.length > 0 && (
+                      <div>
+                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.3px', textTransform: 'uppercase', color: 'var(--text-subtlest)', marginBottom: 4 }}>Move to team (same sprint)</div>
+                        {teamDests.map(d => (
+                          <button key={d.teamId} onClick={() => onMove(it.key, d.teamId, d.sprintId)} disabled={moveSaving}
+                            style={{ display: 'block', width: '100%', textAlign: 'left', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '6px 9px', fontSize: 12, color: 'var(--text)', cursor: moveSaving ? 'default' : 'pointer', fontFamily: 'inherit', marginBottom: 4 }}>
+                            {d.name} · {STATE_LABEL[d.state]} · {d.alloc}/{d.cap}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {moveError && <div style={{ fontSize: 12, color: 'var(--over-text)' }}>{moveError}</div>}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Waterline stage ────────────────────────────────────────────────────────────
+function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, overrides, threshold, releaseDate, ideas, conversion, statusMap, onMarkIdeaDone }) {
+  const [wlData, setWlData] = useState(null);
+  const [wlLoading, setWlLoading] = useState(true);
+  const [wlError, setWlError] = useState(null);
+  const [drawer, setDrawer] = useState(null); // { teamId, sprintId }
+  const [moveMenuFor, setMoveMenuFor] = useState(null);
+  const [moveSaving, setMoveSaving] = useState(false);
+  const [moveError, setMoveError] = useState(null);
+  const [wlCollapsed, setWlCollapsed] = useState({});
+
+  const load = useCallback(() => {
+    if (!versionId) return;
+    setWlLoading(true); setWlError(null);
+    invoke('getWaterline', { versionId })
+      .then(setWlData)
+      .catch(e => setWlError(String(e.message || e)))
+      .finally(() => setWlLoading(false));
+  }, [versionId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const teamById = Object.fromEntries(teams.map(t => [t.id, t]));
+  const ideaById = Object.fromEntries(ideas.map(i => [i.key, i]));
+
+  const dActive = (teamId, sprintId) => (selection[teamId] || []).includes(sprintId);
+  const teamSprintOf = (teamId, name) => (sprintsByTeam[teamId] || []).find(sp => sp.name === name && dActive(teamId, sp.id));
+  const getCap = (teamId, sprintId) => {
+    const ov = overrides[`${teamId}:${sprintId}`];
+    return ov?.pts != null ? ov.pts : (teamById[teamId]?.sprintCap ?? 0);
+  };
+  const hasOverride = (teamId, sprintId) => overrides[`${teamId}:${sprintId}`]?.pts != null;
+  const getAlloc = (teamId, sprintId) => wlData?.alloc?.[`${teamId}:${sprintId}`] ?? 0;
+
+  const sprintCols = [];
+  const seenNames = new Set();
+  teams.forEach(t => {
+    (sprintsByTeam[t.id] || []).forEach(sp => {
+      if (dActive(t.id, sp.id) && !seenNames.has(sp.name)) { seenNames.add(sp.name); sprintCols.push(sp); }
+    });
+  });
+  sprintCols.sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+
+  const conflict = col => releaseDate && teams.some(t => {
+    const sp = teamSprintOf(t.id, col.name);
+    return sp?.endDate && new Date(sp.endDate) > new Date(releaseDate);
+  });
+
+  const noSprints = sprintCols.length === 0;
+  const unpointed = wlData?.unpointed ?? 0;
+
+  const handleMove = async (issueKey, toTeamId, toSprintId) => {
+    setMoveSaving(true); setMoveError(null);
+    try {
+      const res = await withSaving(() => invoke('moveWaterlineItem', { issueKey, toTeamId, toSprintId }));
+      if (!res.ok) { setMoveError(res.error || 'Failed to move'); return; }
+      setMoveMenuFor(null);
+      setDrawer({ teamId: toTeamId, sprintId: toSprintId });
+      load();
+    } catch (e) {
+      setMoveError(String(e.message || e));
+    } finally {
+      setMoveSaving(false);
+    }
+  };
+
+  // Drawer derived data
+  let drawerItems = [], drawerSprintDests = [], drawerTeamDests = [], drawerSmoothing = [];
+  if (drawer) {
+    const items = (wlData?.execByTeam?.[drawer.teamId] || []).filter(it => it.sprintId === drawer.sprintId);
+    drawerItems = items;
+    const sprint = sprintsByTeam[drawer.teamId]?.find(sp => sp.id === drawer.sprintId);
+    drawerSprintDests = (selection[drawer.teamId] || [])
+      .filter(sid => sid !== drawer.sprintId)
+      .map(sid => sprintsByTeam[drawer.teamId]?.find(sp => sp.id === sid))
+      .filter(Boolean)
+      .map(sp => ({ sprintId: sp.id, name: sp.name, state: dStateOf(getAlloc(drawer.teamId, sp.id), getCap(drawer.teamId, sp.id), threshold), alloc: getAlloc(drawer.teamId, sp.id), cap: getCap(drawer.teamId, sp.id) }));
+    drawerTeamDests = teams.filter(t => t.id !== drawer.teamId).map(t => {
+      const sp = sprint ? teamSprintOf(t.id, sprint.name) : null;
+      if (!sp) return null;
+      return { teamId: t.id, name: t.name, sprintId: sp.id, state: dStateOf(getAlloc(t.id, sp.id), getCap(t.id, sp.id), threshold), alloc: getAlloc(t.id, sp.id), cap: getCap(t.id, sp.id) };
+    }).filter(Boolean);
+    if (dStateOf(getAlloc(drawer.teamId, drawer.sprintId), getCap(drawer.teamId, drawer.sprintId), threshold) === 'over') {
+      const cands = [...drawerSprintDests.map(d => ({ label: d.name, free: d.cap - d.alloc })),
+        ...drawerTeamDests.map(d => ({ label: d.name, free: d.cap - d.alloc }))];
+      drawerSmoothing = cands.filter(c => c.free > 0).sort((a, b) => b.free - a.free);
+    }
+  }
+
+  const doneStatus = statusMap?.Done ?? 'Done';
+
+  return (
+    <>
+      {drawer && (
+        <WaterlineDrawer
+          team={teamById[drawer.teamId]}
+          sprint={sprintsByTeam[drawer.teamId]?.find(sp => sp.id === drawer.sprintId)}
+          alloc={getAlloc(drawer.teamId, drawer.sprintId)}
+          cap={getCap(drawer.teamId, drawer.sprintId)}
+          threshold={threshold}
+          items={drawerItems}
+          ideaById={ideaById}
+          moveMenuFor={moveMenuFor}
+          moveSaving={moveSaving}
+          moveError={moveError}
+          sprintDests={drawerSprintDests}
+          teamDests={drawerTeamDests}
+          smoothing={drawerSmoothing}
+          onMoveMenu={key => { setMoveMenuFor(prev => prev === key ? null : key); setMoveError(null); }}
+          onMove={handleMove}
+          onClose={() => { setDrawer(null); setMoveMenuFor(null); }}
+        />
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          {unpointed > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--text-subtle)' }}><b style={{ color: 'var(--text)' }}>{unpointed}</b> item{unpointed !== 1 ? 's' : ''} unpointed <span style={{ color: 'var(--text-subtlest)' }}>— contributes 0</span></span>
+          )}
+          <div style={{ flex: 1 }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: 12, color: 'var(--text-subtle)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--ok)' }} />OK</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--filling)' }} />Filling</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, background: 'var(--over)' }} />Over</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><b>◆</b> overridden</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}><span style={{ width: 9, height: 9, borderRadius: 2, border: '1px dashed var(--border)' }} />n/a</span>
+          </div>
+        </div>
+
+        {wlError && <div style={{ fontSize: 13, color: 'var(--over-text)' }}>{wlError}</div>}
+
+        {wlLoading ? (
+          <div style={{ textAlign: 'center', padding: '56px', color: 'var(--text-subtlest)', fontSize: 14 }}>Loading waterline…</div>
+        ) : noSprints ? (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: '56px 20px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8 }}>
+            <div style={{ fontSize: 28, color: 'var(--text-subtlest)' }}>▦</div>
+            <div style={{ fontSize: 14, color: 'var(--text-subtle)' }}>Pick sprints in step ① to build the waterline.</div>
+          </div>
+        ) : (
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'auto', padding: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: `170px repeat(${sprintCols.length}, minmax(120px,1fr)) 132px`, gap: 8 }}>
+              <div />
+              {sprintCols.map(col => (
+                <div key={col.name} style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>
+                  {col.name} <span style={{ fontWeight: 500, color: 'var(--text-subtlest)' }}>· {threshold}%</span>
+                  {conflict(col) && <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--over-text)' }}>⚠ ends after release</div>}
+                </div>
+              ))}
+              <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)' }}>Team total</div>
+
+              {teams.map(team => {
+                const actSp = sprintCols.map(col => teamSprintOf(team.id, col.name)).filter(sp => sp && dActive(team.id, sp.id));
+                const tAlloc = actSp.reduce((a, sp) => a + getAlloc(team.id, sp.id), 0);
+                const tCap = actSp.reduce((a, sp) => a + getCap(team.id, sp.id), 0);
+                return (
+                  <React.Fragment key={team.id}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--brand)', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, flexShrink: 0 }}>{initials(team.name)}</span>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{team.name}</span>
+                    </div>
+                    {sprintCols.map(col => {
+                      const sp = teamSprintOf(team.id, col.name);
+                      const active = !!sp && dActive(team.id, sp.id);
+                      return (
+                        <WaterlineCell key={col.name}
+                          active={active}
+                          alloc={active ? getAlloc(team.id, sp.id) : 0}
+                          cap={active ? getCap(team.id, sp.id) : 0}
+                          hasOverride={active && hasOverride(team.id, sp.id)}
+                          threshold={threshold}
+                          clickable={active}
+                          onClick={() => setDrawer({ teamId: team.id, sprintId: sp.id })}
+                        />
+                      );
+                    })}
+                    <WaterlineCell active alloc={tAlloc} cap={tCap} hasOverride={false} threshold={threshold} clickable={false} />
+                  </React.Fragment>
+                );
+              })}
+
+              <div style={{ fontSize: 12, fontWeight: 800, color: 'var(--text)', alignSelf: 'center' }}>TOTAL</div>
+              {sprintCols.map(col => {
+                const actT = teams.filter(t => { const sp = teamSprintOf(t.id, col.name); return sp && dActive(t.id, sp.id); });
+                const cAlloc = actT.reduce((a, t) => a + getAlloc(t.id, teamSprintOf(t.id, col.name).id), 0);
+                const cCap = actT.reduce((a, t) => a + getCap(t.id, teamSprintOf(t.id, col.name).id), 0);
+                return <WaterlineCell key={col.name} active alloc={cAlloc} cap={cCap} hasOverride={false} threshold={threshold} clickable={false} />;
+              })}
+              {(() => {
+                const gAlloc = teams.reduce((a, t) => a + sprintCols.reduce((aa, col) => { const sp = teamSprintOf(t.id, col.name); return aa + (sp && dActive(t.id, sp.id) ? getAlloc(t.id, sp.id) : 0); }, 0), 0);
+                const gCap = teams.reduce((a, t) => a + sprintCols.reduce((aa, col) => { const sp = teamSprintOf(t.id, col.name); return aa + (sp && dActive(t.id, sp.id) ? getCap(t.id, sp.id) : 0); }, 0), 0);
+                return <WaterlineCell active alloc={gAlloc} cap={gCap} hasOverride={false} threshold={threshold} clickable={false} />;
+              })()}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 12 }}>
+              Click any cell to open its work items and move them between sprints or teams. Committed points read live from Jira per team-sprint.
+            </div>
+          </div>
+        )}
+
+        {!wlLoading && wlData && Object.values(wlData.execByTeam || {}).some(items => items.length > 0) && (
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Execution — epics, stories &amp; tasks in flight</div>
+              <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 2 }}>Epics with their child stories/tasks (linked to a planned idea are tinted &amp; ★). Unplanned work added in each sprint is shown too.</div>
+            </div>
+            {teams.filter(t => (wlData.execByTeam[t.id] || []).length > 0).map(team => {
+              const items = wlData.execByTeam[team.id];
+              const isCollapsed = !!wlCollapsed[team.id];
+              const planned = items.filter(it => it.ideaKey).length;
+              const totalPts = items.filter(it => it.type !== 'epic').reduce((a, it) => a + (it.estimate || 0), 0);
+              return (
+                <div key={team.id}>
+                  <div onClick={() => setWlCollapsed(c => ({ ...c, [team.id]: !c[team.id] }))}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', background: 'var(--surface-sunken)', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', cursor: 'pointer' }}>
+                    <span style={{ color: 'var(--text-subtlest)', fontSize: 11, width: 10 }}>{isCollapsed ? '▸' : '▾'}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>{team.name}</span>
+                    <div style={{ flex: 1 }} />
+                    <span style={{ fontSize: 11, color: 'var(--text-subtlest)' }}>{items.length} items · {planned} planned · {totalPts} pts</span>
+                  </div>
+                  {!isCollapsed && items.map(it => {
+                    const idea = it.ideaKey ? ideaById[it.ideaKey] : null;
+                    const sprintName = it.type === 'epic' ? 'across sprints' : (sprintsByTeam[team.id]?.find(sp => sp.id === it.sprintId)?.name ?? '—');
+                    const showDone = it.type === 'epic' && it.status === doneStatus && idea && idea.status !== doneStatus;
+                    return (
+                      <div key={it.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', paddingLeft: it.isChild ? 40 : 20, borderBottom: '1px solid var(--border-subtle)', background: idea ? 'rgba(124,92,246,0.07)' : 'transparent' }}>
+                        <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--text)' }}>
+                          <IssueKey issueKey={it.key} siteUrl={siteUrl} /> {it.title}
+                          {idea && <span style={{ marginLeft: 8, fontSize: 11, color: '#6D4BD8' }}>★ {idea.title}</span>}
+                        </div>
+                        <div style={{ width: 110, fontSize: 12, color: 'var(--text-subtle)' }}>{sprintName}</div>
+                        <div style={{ width: 90, fontSize: 12, color: 'var(--text-subtle)' }}>{it.status}</div>
+                        <div style={{ width: 70, fontSize: 12, fontWeight: 700, color: 'var(--text)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                          {it.estimate}{it.type === 'epic' ? ' (Σ)' : ''}
+                        </div>
+                        {showDone && (
+                          <button onClick={() => onMarkIdeaDone(idea.key)}
+                            style={{ background: 'var(--ok)', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                            ✓ Mark idea Done
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -1242,6 +1723,14 @@ export default function DeliveryPlanningTab({ data }) {
     });
   }, []);
 
+  // Waterline execution table's "Mark idea Done" — reuses the same status-transition
+  // resolver as Intake/Release Planning, keyed by the app's own lifecycle map.
+  const handleMarkIdeaDone = useCallback((ideaKey) => {
+    const doneStatus = config.jiraCfg?.statusMap?.Done ?? 'Done';
+    setLocalIdeas(prev => prev.map(i => i.key === ideaKey ? { ...i, status: doneStatus } : i));
+    withSaving(() => invoke('transitionIdea', { issueKey: ideaKey, targetStatus: 'Done' })).catch(console.error);
+  }, [config.jiraCfg]);
+
   const sprintsByTeam = deliveryData?.sprintsByTeam || {};
 
   const getCap = (teamId, sid) => {
@@ -1390,25 +1879,26 @@ export default function DeliveryPlanningTab({ data }) {
               onUndoDone={handleUndoDone}
             />
           ) : activeStage === 'waterline' ? (
-            <StageStub
-              number="3" label="Waterline"
-              description={'Live sprint × team grid showing allocated vs capacity. Click a cell to see that team\'s items in that sprint.'}
-              bullets={[
-                'Sprint × Team grid showing allocated vs capacity per cell',
-                'Click a cell to see items with move/reassign options',
-                'Planned (from ideas) vs actual (from Jira story points) per team',
-                '"✓ Mark idea Done" button when linked epic is closed but idea isn\'t',
-              ]}
+            <WaterlineStage
+              teams={localTeams}
+              versionId={versionId}
+              siteUrl={siteUrl}
+              sprintsByTeam={sprintsByTeam}
+              selection={selection}
+              overrides={overrides}
+              threshold={release.threshold ?? config.threshold ?? 70}
+              releaseDate={selectedVersion?.releaseDate}
+              ideas={localIdeas}
+              conversion={conversion}
+              statusMap={config.jiraCfg?.statusMap}
+              onMarkIdeaDone={handleMarkIdeaDone}
             />
           ) : (
-            <StageStub
-              number="R" label="Reconcile"
-              description={'Planned capacity vs actual converted story points per team.'}
-              bullets={[
-                'Per-team bar chart: planned pts vs actual pts',
-                'Drift % with ≈ on-track · ▲ over-running · ▼ under labels',
-                'Grand total row: overall planned vs actual for the release',
-              ]}
+            <ReconcileStage
+              ideas={localIdeas}
+              teams={localTeams}
+              versionId={versionId}
+              conversion={conversion}
             />
           )}
         </>

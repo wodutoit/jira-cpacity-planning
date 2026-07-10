@@ -132,8 +132,22 @@ metadata:
 - Storage: flat `conversion` map keyed by **idea issue key** (not per-version — conversion state belongs to the idea): `{ [ideaKey]: { status, epicKey, storyKeys: [], sprintIds: [], project, type, name, desc, pts } }`
 - New resolvers: `getConversion`, `convertIdea`, `undoConvert`; refactored `transitionIssueTo()` shared helper
 
-### Delivery Planning tab — Stages 3-4 (stubs, not started)
-- Waterline, Reconcile — each a `StageStub` describing planned functionality
+### Delivery Planning tab — Stage 3 "Waterline" ✅ built, needs live-instance testing
+- Team × sprint-name grid (columns deduped by sprint name across teams, matching Stage 1's convention), + a non-clickable "Team total" column and "TOTAL" row + grand-total cell. Cell = alloc/cap bar, colored by `dStateOf` (ok ≤ threshold%, filling ≤100%, over >100%, nocap if cap is 0), ◆ marker if the cell has a Stage-1 capacity override. Inactive (not Stage-1-selected) cells render a hatched "n/a" placeholder. Clicking an active cell opens a right-side drawer.
+- **Data is fully live, never cached**: `getWaterline` resolver walks each team's Stage-1-selected sprint IDs and calls `GET /rest/agile/1.0/sprint/{id}/issue` (paginated) — the authoritative "what's in this sprint right now," not a guess via a sprint custom-field JQL. Epics are fetched separately by key (`conversion` map's `epicKey`s) since `convertIdea` never places the epic itself in a sprint — only its child stories. Contribution rule: an epic with fetched children contributes 0 (rolled into children); everything else contributes its own story-point estimate (`jiraCfg.sizeField` then `customfield_10016` fallback). Returns `{ alloc: {"teamId:sprintId": pts}, execByTeam: {teamId: [...]}, unpointed }`.
+- **Execution table** ("Execution — epics, stories & tasks in flight"): per-team collapsible list built server-side — epic row (estimate shown as "N (Σ)") + its children indented, then unplanned/loose items (fetched but not a child of any tracked epic and not itself a tracked epic). Rows linked to an idea (via the `conversion` reverse-map `epicKey/storyKey → ideaKey`) are tinted and show "★ {idea title}". "✓ Mark idea Done" appears on a Done epic whose linked idea isn't Done yet — reuses the existing `transitionIdea` resolver (`targetStatus: 'Done'`), no new backend needed.
+- **Drawer**: shows items in that exact team+sprint cell, "Move ▾" per item opens "Move to sprint (same team)" and "Move to team (same sprint-name)" destination lists, plus an over-capacity "cells with headroom" hint. Moving calls `moveWaterlineItem`.
+- **`moveWaterlineItem` resolver — the riskiest piece, needs real-instance testing**: same-team move = one `POST /rest/agile/1.0/sprint/{id}/issue` call (safe, well-supported). Cross-team move = a cross-*project* move (a team maps 1:1 to a Jira project via its board), which has no simple field-edit equivalent — implemented via Jira's **Bulk Issue Move API** (`POST /rest/api/3/bulk/issues/move`, async — returns a `taskId`, polled via `GET /rest/api/3/task/{taskId}` for up to 3s before returning `status: 'pending'`). This API's exact contract could not be verified against a live site during this session (advanced/relatively new Jira Cloud API) — if it 400s or behaves unexpectedly, the resolver surfaces Jira's raw error and tells the user to finish the move by hand; **user explicitly chose to support cross-team move despite this risk** (alternative was sprint-move-only). Also: moving a child story alone to a different project may orphan its parent-epic link (team-managed hierarchy requires epic+story in the same project) — not yet handled/warned about in the UI.
+- Bar visualization simplified from the prototype's vertical banded gauge to a horizontal fill bar (cleaner in a table cell); all thresholds/states/override-marker/click-behavior ported faithfully.
+- The "ends after release" ⚠ column-header warning needed `releaseDate` on versions — added `releaseDate: v.releaseDate` to `fetchVersions()`'s mapped output (was previously just id/name/released/archived).
+
+### Delivery Planning tab — Stage 4 "Reconcile" ✅ built
+- Pure read-only, client-side only — **no resolver, no Jira calls**, matching the prototype exactly: it intentionally compares against the point value captured at conversion time (`conversion[ideaKey].pts`, falling back to `idea.size`), not a live re-sum of story points from Jira. Per-team row: planned = Σ `idea.size` over the team's ideas in the release; actual = Σ conversion-time points over only the *converted* ones (null/blank if none converted yet).
+- Drift band (distinct from the capacity ok/filling/over threshold used elsewhere): `|pct| ≤ 10% → ok, ≤25% → filling, >25% → over` (over fires for large drift in **either** direction, over- or under-running — reused red palette, not a capacity-overflow semantic). Footer "Release" row sums planned/actual across teams; footnote counts not-yet-converted teams excluded from the actual total (pluralization fixed vs. the prototype's noted "N team not yet converted" grammar bug — harmless copy-only fix, not a behavior change).
+- Reads `localIdeas`/`localTeams`/`conversion` already loaded for Convert Ideas — no extra data fetch needed when switching to this stage.
+
+### New resolvers this session
+- `getWaterline({ versionId })`, `moveWaterlineItem({ issueKey, toTeamId, toSprintId })` — see above.
 
 ### Global features ✅
 - Global "Saving…" spinner in header (window cpw-saving events)
@@ -149,7 +163,8 @@ updateIdeaTeam (storage only), updateIdeaSize (storage + Jira), updateIdeaReleas
 updateIdeaRice, updateIdeaSummary, transitionIdea, createIdea, deleteIdea, searchUsers, resolveUsers,
 getBoards (all Scrum boards, no type filter — team-managed boards report type="software"),
 getDelivery (live sprints per team + missingByTeam + releaseCapacity), saveDelivery (selection+overrides only),
-updateSprint (POST partial update), createSprint (POST /sprint with originBoardId), deleteSprint (checks emptiness, then DELETE)
+updateSprint (POST partial update), createSprint (POST /sprint with originBoardId), deleteSprint (checks emptiness, then DELETE),
+getConversion, convertIdea, undoConvert, getWaterline (live per-sprint-issue fetch, never cached), moveWaterlineItem (sprint move + cross-project bulk move)
 
 ## Manifest scopes (permissions.scopes)
 read:jira-work, read:jira-user, write:jira-work, read:issue:jira, read:project:jira, read:issue-type:jira,
@@ -157,13 +172,10 @@ read:field:jira, write:issue:jira, read:board-scope:jira-software, read:sprint:j
 write:sprint:jira-software, delete:sprint:jira-software, read:issue-details:jira, read:jql:jira, storage:app
 - delete:sprint:jira-software / read:issue-details:jira / read:jql:jira added for sprint-issue-count check + delete
 - **New scopes require `forge install --upgrade` on the target site** (interactive-only command) before they take effect
+- `forge lint` did not flag any new scope requirement for the Bulk Issue Move API call (`/rest/api/3/bulk/issues/move`) added for Waterline's cross-team move — likely because the linter's static endpoint→scope map doesn't recognize this newer API, not necessarily because no additional scope is needed. If cross-team move fails at runtime with a permission-style error, check whether a newer/broader scope (beyond `write:issue:jira`) is required and add it.
 
 ## What's next
-
-### Delivery Planning tab (Stages 2-4 — not started)
-1. Convert Ideas — release ideas → Jira epics, per-sprint story creation, mismatch warnings
-2. Waterline — sprint × team grid, drill-in drawer, "Mark idea Done"
-3. Reconcile — planned vs actual per team
+- Delivery Planning Stages 1-4 are all built. Next candidates: live-instance testing of Stage 3's cross-team move (see Known limitations), or a new feature area entirely — nothing is queued unless the user asks.
 
 ### Known limitations / gaps
 - Teams API dead: no Jira sync for team identity, Config-only
@@ -171,3 +183,5 @@ write:sprint:jira-software, delete:sprint:jira-software, read:issue-details:jira
 - RICE popover: only in Release Planning (not in Intake dots → they write directly)
 - By version mode: idea table works but shows all versions' ideas when no filter selected
 - Delivery board link (delete dialog) assumes `/jira/software/projects/{key}/boards/{id}` URL pattern — not verified across all Jira Cloud tiers
+- **Waterline's cross-team move (Bulk Issue Move API) is unverified against a live Jira instance** — this session couldn't test it end-to-end; the exact request/response contract for `/rest/api/3/bulk/issues/move` was implemented from training knowledge, not confirmed live. Test with a real cross-project move before relying on it. Likely failure modes: target project missing required fields Jira can't infer, the async task not completing within the 3s poll window (falls back to `status: 'pending'`, not a failure but not confirmed-complete either), or the API being gated behind a scope/plan not currently granted.
+- Moving a single child story cross-team (not its parent epic) may silently drop the parent-epic link, since team-managed epic↔story links require both issues in the same project — not currently detected or warned about.

@@ -109,7 +109,7 @@ async function fetchVersions(jiraCfg) {
   );
   if (!res.ok) return [];
   const body = await res.json();
-  return (body || []).map(v => ({ id: v.id, name: v.name, released: v.released, archived: v.archived }));
+  return (body || []).map(v => ({ id: v.id, name: v.name, released: v.released, archived: v.archived, releaseDate: v.releaseDate ?? null }));
 }
 
 resolver.define('getAll', async ({ payload }) => {
@@ -791,6 +791,238 @@ resolver.define('undoConvert', async ({ payload }) => {
   conversion[ideaKey] = { status: 'not' };
   await kvs.set('conversion', conversion);
   return { ok: true, allocPts };
+});
+
+// Live "Waterline" data for a release. Never cached — walks each team's Stage-1
+// selected sprints and asks Jira (via the Agile sprint-issue endpoint, authoritative
+// for "what's in this sprint right now") what's actually placed there, then classifies
+// against our `conversion` records (epic/story key -> idea key) to build:
+//   - `alloc`: "{teamId}:{sprintId}" -> committed points (epics with fetched children
+//     contribute 0 — their points roll up into the children instead)
+//   - `execByTeam`: per-team flat list of epics+children+unplanned work for the audit table
+//   - `unpointed`: count of non-epic sprint items with no story-point estimate
+resolver.define('getWaterline', async ({ payload }) => {
+  const { versionId } = payload;
+  const config = (await kvs.get('config')) ?? {};
+  const teams = config.teams ?? [];
+  const jiraCfg = config.jiraCfg ?? {};
+  const sizeFields = [jiraCfg.sizeField, 'customfield_10016'].filter(Boolean);
+
+  const delivery = (await kvs.get(`delivery:${versionId}`)) ?? { selection: {}, overrides: {} };
+  const selection = delivery.selection || {};
+
+  const conversion = (await kvs.get('conversion')) ?? {};
+  const ideaByIssueKey = {};
+  Object.entries(conversion).forEach(([ideaKey, c]) => {
+    if (c.status !== 'converted') return;
+    if (c.epicKey) ideaByIssueKey[c.epicKey] = ideaKey;
+    (c.storyKeys || []).forEach(k => { ideaByIssueKey[k] = ideaKey; });
+  });
+  const epicKeys = Object.values(conversion).filter(c => c.status === 'converted' && c.epicKey).map(c => c.epicKey);
+
+  const fieldsParam = ['summary', 'issuetype', 'status', 'parent', ...sizeFields].join(',');
+  const itemsByKey = {};   // issueKey -> normalized item
+  const sprintOfKey = {};  // issueKey -> { teamId, sprintId }
+
+  for (const team of teams) {
+    for (const sprintId of (selection[team.id] || [])) {
+      let startAt = 0;
+      for (;;) {
+        const res = await asUser().requestJira(
+          route`/rest/agile/1.0/sprint/${sprintId}/issue?fields=${fieldsParam}&maxResults=100&startAt=${startAt}`,
+          { headers: { Accept: 'application/json' } }
+        );
+        if (!res.ok) break;
+        const body = await res.json();
+        const issues = body.issues || [];
+        issues.forEach(iss => {
+          const pts = sizeFields.map(f => iss.fields[f]).find(v => v != null) ?? null;
+          itemsByKey[iss.key] = {
+            key: iss.key,
+            summary: iss.fields.summary,
+            type: (iss.fields.issuetype?.name || '').toLowerCase(),
+            status: iss.fields.status?.name || '',
+            parentKey: iss.fields.parent?.key || null,
+            estimate: pts,
+          };
+          sprintOfKey[iss.key] = { teamId: team.id, sprintId };
+        });
+        startAt += issues.length;
+        if (!issues.length || startAt >= (body.total ?? 0)) break;
+      }
+    }
+  }
+
+  // Epics are never themselves moved into a sprint (see convertIdea) — fetch them
+  // separately so the execution table can show the epic row even though only its
+  // children showed up in the sprint-issue fetch above.
+  const epicByKey = {};
+  if (epicKeys.length) {
+    const jql = encodeURIComponent(`key in (${epicKeys.join(',')})`);
+    let res = await asUser().requestJira(
+      route`/rest/api/3/search?jql=${jql}&maxResults=${epicKeys.length}&fields=summary,status`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (res.status === 410 || res.status === 404) {
+      res = await asUser().requestJira(route`/rest/api/3/search/jql`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jql: `key in (${epicKeys.join(',')})`, maxResults: epicKeys.length, fields: ['summary', 'status'] }),
+      });
+    }
+    if (res.ok) {
+      const body = await res.json();
+      (body.issues || []).forEach(iss => {
+        epicByKey[iss.key] = { key: iss.key, summary: iss.fields.summary, status: iss.fields.status?.name || '' };
+      });
+    }
+  }
+
+  const childrenOf = {}; // epicKey -> [childKey,...]
+  Object.values(itemsByKey).forEach(it => {
+    if (it.parentKey) (childrenOf[it.parentKey] = childrenOf[it.parentKey] || []).push(it.key);
+  });
+  const contribution = item => (item.type === 'epic' && childrenOf[item.key]?.length) ? 0 : (item.estimate || 0);
+
+  const alloc = {};
+  Object.entries(sprintOfKey).forEach(([key, { teamId, sprintId }]) => {
+    const item = itemsByKey[key];
+    if (!item) return;
+    const k = `${teamId}:${sprintId}`;
+    alloc[k] = (alloc[k] || 0) + contribution(item);
+  });
+
+  const execByTeam = {};
+  teams.forEach(t => { execByTeam[t.id] = []; });
+  const consumedAsChild = new Set(Object.values(childrenOf).flat());
+
+  Object.entries(epicByKey).forEach(([epicKey, epic]) => {
+    const kids = (childrenOf[epicKey] || []).map(k => itemsByKey[k]).filter(Boolean);
+    const teamId = kids.length ? sprintOfKey[kids[0].key]?.teamId : null;
+    if (!teamId || !execByTeam[teamId]) return; // no children placed in this release's sprints — nothing to show
+    const ideaKey = ideaByIssueKey[epicKey] || null;
+    execByTeam[teamId].push({
+      key: epicKey, type: 'epic', title: epic.summary, status: epic.status,
+      estimate: kids.reduce((a, k) => a + contribution(k), 0), sprintId: null, ideaKey, isChild: false,
+    });
+    kids.forEach(k => {
+      execByTeam[teamId].push({
+        key: k.key, type: k.type, title: k.summary, status: k.status,
+        estimate: contribution(k), sprintId: sprintOfKey[k.key]?.sprintId,
+        ideaKey: ideaByIssueKey[k.key] || ideaKey, isChild: true,
+      });
+    });
+  });
+
+  Object.values(itemsByKey).forEach(item => {
+    if (consumedAsChild.has(item.key) || epicByKey[item.key]) return;
+    const loc = sprintOfKey[item.key];
+    if (!loc || !execByTeam[loc.teamId]) return;
+    execByTeam[loc.teamId].push({
+      key: item.key, type: item.type, title: item.summary, status: item.status,
+      estimate: contribution(item), sprintId: loc.sprintId, ideaKey: ideaByIssueKey[item.key] || null, isChild: false,
+    });
+  });
+
+  const unpointed = Object.values(itemsByKey).filter(it => it.type !== 'epic' && !it.estimate).length;
+
+  return { alloc, execByTeam, unpointed };
+});
+
+// Move a Jira item that's part of the Waterline. Same team = a plain sprint move
+// (one Agile API call). Different team = a cross-project move, since a team maps
+// 1:1 to a Jira project here — there's no lightweight "change project" field edit,
+// so this uses Jira's async Bulk Issue Move API and polls briefly for completion.
+// This is the least-proven part of the integration: cross-project moves depend on
+// the target project having a matching issue type and satisfying its required
+// fields, which we can't fully control for. Errors are surfaced verbatim so the
+// user can finish the move by hand in Jira if it fails.
+resolver.define('moveWaterlineItem', async ({ payload }) => {
+  const { issueKey, toTeamId, toSprintId } = payload;
+  const config = (await kvs.get('config')) ?? {};
+  const teams = config.teams ?? [];
+  const toTeam = teams.find(t => t.id === toTeamId);
+  if (!toTeam?.boardId) return { ok: false, error: 'Target team has no Jira board linked.' };
+
+  const [issueRes, boardRes] = await Promise.all([
+    asUser().requestJira(route`/rest/api/3/issue/${issueKey}?fields=project,issuetype`, { headers: { Accept: 'application/json' } }),
+    asUser().requestJira(route`/rest/agile/1.0/board/${toTeam.boardId}`, { headers: { Accept: 'application/json' } }),
+  ]);
+  if (!issueRes.ok) return { ok: false, error: `Could not read ${issueKey} (${issueRes.status}).` };
+  if (!boardRes.ok) return { ok: false, error: `Could not resolve the target board (${boardRes.status}).` };
+  const issueBody = await issueRes.json();
+  const boardBody = await boardRes.json();
+  const currentProjectKey = issueBody.fields.project?.key;
+  const targetProjectKey = boardBody.location?.projectKey;
+  if (!targetProjectKey) return { ok: false, error: 'Target board has no associated project.' };
+
+  if (currentProjectKey === targetProjectKey) {
+    if (toSprintId) {
+      const res = await asUser().requestJira(route`/rest/agile/1.0/sprint/${toSprintId}/issue`, {
+        method: 'POST',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ issues: [issueKey] }),
+      });
+      if (!res.ok) return { ok: false, error: `Could not move ${issueKey} to that sprint (${res.status}).` };
+    }
+    return { ok: true, moved: 'sprint' };
+  }
+
+  const targetProjRes = await asUser().requestJira(route`/rest/api/3/project/${targetProjectKey}`, { headers: { Accept: 'application/json' } });
+  if (!targetProjRes.ok) return { ok: false, error: `Could not read target project ${targetProjectKey} (${targetProjRes.status}).` };
+  const targetProj = await targetProjRes.json();
+  const issueTypeName = issueBody.fields.issuetype?.name;
+  const targetType = (targetProj.issueTypes || []).find(t => t.name === issueTypeName);
+  if (!targetType) {
+    return { ok: false, error: `${targetProjectKey} has no "${issueTypeName}" issue type — move ${issueKey} manually in Jira.` };
+  }
+
+  const moveRes = await asUser().requestJira(route`/rest/api/3/bulk/issues/move`, {
+    method: 'POST',
+    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sendBulkNotification: false,
+      targetToSourcesMapping: {
+        [`${targetProj.id},${targetType.id}`]: {
+          inferFieldDefaults: true,
+          inferStatusDefaults: true,
+          inferSubtaskTypeDefault: true,
+          issueIdsOrKeys: [issueKey],
+        },
+      },
+    }),
+  });
+  if (!moveRes.ok) {
+    const text = await moveRes.text().catch(() => '');
+    return { ok: false, error: `Jira rejected the move of ${issueKey} to ${targetProjectKey} (${moveRes.status}). ${text.slice(0, 200)} — move it manually in Jira instead.` };
+  }
+  const moveBody = await moveRes.json().catch(() => ({}));
+  const taskId = moveBody.taskId;
+
+  let status = 'pending';
+  if (taskId) {
+    for (let i = 0; i < 3; i++) {
+      const taskRes = await asUser().requestJira(route`/rest/api/3/task/${taskId}`, { headers: { Accept: 'application/json' } });
+      if (taskRes.ok) {
+        const taskBody = await taskRes.json();
+        if (taskBody.status === 'COMPLETE') { status = 'complete'; break; }
+        if (taskBody.status === 'FAILED' || taskBody.status === 'CANCELLED') {
+          return { ok: false, error: `Jira's move task ${taskBody.status.toLowerCase()} for ${issueKey} — check the issue in Jira.` };
+        }
+      }
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+
+  if (toSprintId) {
+    await asUser().requestJira(route`/rest/agile/1.0/sprint/${toSprintId}/issue`, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ issues: [issueKey] }),
+    }).catch(() => {});
+  }
+
+  return { ok: true, moved: 'project', status };
 });
 
 exports.handler = resolver.getDefinitions();
