@@ -1,5 +1,21 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#F4F5F7;color:#172B4D}
+
+/* ── Design tokens ───────────────────────────────────────────────────── */
+:root{
+  --surface:#fff;--surface-raised:#fff;--surface-sunken:#F7F8F9;--surface-hover:#F1F2F4;
+  --text:#172B4D;--text-subtle:#44546F;--text-subtlest:#626F86;
+  --border:#DFE1E6;--border-subtle:#EBECF0;--unassigned-bg:#FAFBFC;
+  --brand:#0C66E4;
+  --ok:#4BCE97;--ok-bg:#DCFFF1;--ok-text:#216E4E;--ok-border:#7EE2B8;
+  --filling:#F5A623;--filling-bg:#FFF7D6;--filling-text:#974F0C;--filling-border:#F5CD47;
+  --over:#E34935;--over-bg:#FFECEB;--over-text:#AE2E24;--over-border:#F5A79D;--over-glow:rgba(227,73,53,.45);
+  --info-bg:#E9F2FF;--info-text:#0055CC;--info-border:#A6C5F7;
+  --threshold:#FF991F;
+  --shadow-sm:0 1px 1px rgba(9,30,66,.10),0 0 1px rgba(9,30,66,.13);
+  --lz-n-bg:#F1F2F4;--lz-n-text:#44546F;
+}
+
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#F4F5F7;color:var(--text)}
 
 /* App shell */
 .app{min-height:100vh}

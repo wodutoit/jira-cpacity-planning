@@ -52,7 +52,7 @@ function extractRelease(fields, releaseField) {
   return String(val);
 }
 
-async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}) {
+async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}, ideaOrder = []) {
   if (!jiraCfg?.ideaSpace) return [];
 
   const { sizeField, releaseField, reachField, impactField, effortField, confidenceField } = jiraCfg;
@@ -80,7 +80,8 @@ async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}) {
 
   if (!res.ok) return [];
   const body = await res.json();
-  return (body.issues || []).map(i => ({
+  const orderMap = Object.fromEntries(ideaOrder.map((k, i) => [k, i]));
+  const mapped = (body.issues || []).map(i => ({
     id: i.id,
     key: i.key,
     title: i.fields.summary,
@@ -95,7 +96,9 @@ async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}) {
     effort: i.fields[effortField ?? 'customfield_10064'] ?? null,
     confidence: i.fields[confidenceField ?? 'customfield_10066'] ?? null,
     riceScore: i.fields.customfield_10068 ?? null,
+    _rank: orderMap[i.key] ?? 99999,
   }));
+  return mapped.sort((a, b) => a._rank - b._rank);
 }
 
 async function fetchVersions(jiraCfg) {
@@ -111,12 +114,13 @@ async function fetchVersions(jiraCfg) {
 
 resolver.define('getAll', async ({ payload }) => {
   const versionId = payload?.versionId ?? null;
-  const [myselfRes, releaseRecord, configRecord, ideaTeams, ideaSizes] = await Promise.all([
+  const [myselfRes, releaseRecord, configRecord, ideaTeams, ideaSizes, ideaOrder] = await Promise.all([
     asUser().requestJira(route`/rest/api/3/myself`, { headers: { Accept: 'application/json' } }),
     versionId ? kvs.get(`release:${versionId}`) : Promise.resolve(null),
     kvs.get('config'),
     kvs.get('ideaTeams'),
     kvs.get('ideaSizes'),
+    kvs.get('ideaOrder'),
   ]);
   const myself = myselfRes.ok ? await myselfRes.json() : {};
   const currentUser = { accountId: myself.accountId ?? null, displayName: myself.displayName ?? null };
@@ -136,7 +140,7 @@ resolver.define('getAll', async ({ payload }) => {
   };
 
   const [ideas, versions] = await Promise.all([
-    fetchIdeas(config.jiraCfg, ideaTeams ?? {}, ideaSizes ?? {}),
+    fetchIdeas(config.jiraCfg, ideaTeams ?? {}, ideaSizes ?? {}, ideaOrder ?? []),
     fetchVersions(config.jiraCfg),
   ]);
 
@@ -348,6 +352,12 @@ resolver.define('updateIdeaSummary', async ({ payload }) => {
     body: JSON.stringify({ fields: { summary } }),
   });
   return { ok: res.ok };
+});
+
+// Persist idea display order
+resolver.define('updateIdeaOrder', async ({ payload }) => {
+  await kvs.set('ideaOrder', payload.order ?? []);
+  return { ok: true };
 });
 
 // Delete an idea

@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { invoke } from '@forge/bridge';
+import { withSaving } from '../utils/saving';
 import Button from '../components/Button';
 import NativeSelect from '../components/NativeSelect';
 
@@ -122,11 +123,11 @@ export default function IntakeTab({ data }) {
     if (!idea) return;
     const updated = { ...idea, [field]: value };
     updateLocal(key, { [field]: value });
-    await invoke('updateIdeaRice', {
+    withSaving(() => invoke('updateIdeaRice', {
       issueKey: key,
       reach: updated.reach, impact: updated.impact,
       effort: updated.effort, confidence: updated.confidence,
-    }).catch(console.error);
+    })).catch(console.error);
   }, [localIdeas]);
 
   const handleConf = useCallback(async (key, raw) => {
@@ -266,9 +267,9 @@ export default function IntakeTab({ data }) {
             <label className="field-label mb-4">Team</label>
             <NativeSelect options={teamSelectOpts} value={newTeam} onChange={setNewTeam} placeholder="— Team" />
           </div>
-          <div style={{ width: 80 }}>
+          <div style={{ width: 100 }}>
             <label className="field-label mb-4">Size</label>
-            <NativeSelect options={SIZES.map(s => ({ value: s, label: s }))} value={newSize} onChange={setNewSize} placeholder="—" />
+            <NativeSelect options={SIZES.map(s => ({ value: s, label: `${s} · ${scale[s] ?? '?'}` }))} value={newSize} onChange={setNewSize} placeholder="—" />
           </div>
           <div style={{ width: 150 }}>
             <label className="field-label mb-4">Version</label>
@@ -359,7 +360,7 @@ export default function IntakeTab({ data }) {
                     <select className="inline-select" value={pointsToSize(idea.size) ?? ''}
                       onChange={e => handleSize(idea.key, e.target.value || null)}>
                       <option value="">—</option>
-                      {SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+                      {SIZES.map(s => <option key={s} value={s}>{s} · {scale[s] ?? '?'}</option>)}
                     </select>
                   </td>
                   <td>
