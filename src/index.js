@@ -388,14 +388,9 @@ resolver.define('updateIdeaRice', async ({ payload }) => {
   return { ok: res.ok, status: res.status };
 });
 
-// Transition an idea's status
-resolver.define('transitionIdea', async ({ payload }) => {
-  const { issueKey, targetStatus } = payload;
-  const configRecord = await kvs.get('config');
-  const jiraCfg = configRecord?.jiraCfg;
-  const statusMap = jiraCfg?.statusMap ?? {};
-  const jiraStatusName = statusMap[targetStatus] ?? targetStatus;
-  // Get available transitions
+// Shared: move an issue to the Jira status with the given name (used by transitionIdea
+// and by convertIdea, which auto-advances an idea to "Doing" on conversion).
+async function transitionIssueTo(issueKey, jiraStatusName) {
   const tRes = await asUser().requestJira(
     route`/rest/api/3/issue/${issueKey}/transitions`,
     { headers: { Accept: 'application/json' } }
@@ -409,6 +404,16 @@ resolver.define('transitionIdea', async ({ payload }) => {
     body: JSON.stringify({ transition: { id: transition.id } }),
   });
   return { ok: res.ok };
+}
+
+// Transition an idea's status
+resolver.define('transitionIdea', async ({ payload }) => {
+  const { issueKey, targetStatus } = payload;
+  const configRecord = await kvs.get('config');
+  const jiraCfg = configRecord?.jiraCfg;
+  const statusMap = jiraCfg?.statusMap ?? {};
+  const jiraStatusName = statusMap[targetStatus] ?? targetStatus;
+  return transitionIssueTo(issueKey, jiraStatusName);
 });
 
 // User search for the Access Control picker
@@ -625,6 +630,167 @@ resolver.define('deleteSprint', async ({ payload }) => {
     return { ok: false, error: `${delRes.status} ${text.slice(0, 200)}` };
   }
   return { ok: true };
+});
+
+function adfDoc(text) {
+  return {
+    type: 'doc', version: 1,
+    content: [{ type: 'paragraph', content: text ? [{ type: 'text', text }] : [] }],
+  };
+}
+
+// Best-effort story-points write — field key varies per project/instance, so try the
+// app's configured size field first, then Jira Cloud's common default, and swallow failures.
+async function tryWritePoints(issueKey, points, sizeField) {
+  const candidates = [sizeField, 'customfield_10016'].filter(Boolean);
+  for (const field of candidates) {
+    try {
+      const res = await asUser().requestJira(route`/rest/api/3/issue/${issueKey}`, {
+        method: 'PUT',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: { [field]: points } }),
+      });
+      if (res.ok) return;
+    } catch { /* try next candidate */ }
+  }
+}
+
+// Load per-idea conversion status (flat map keyed by idea issue key — conversion state
+// belongs to the idea, not to a specific release view) plus mismatch detection: if a
+// converted epic was later moved to a different Jira project than the idea's mapped team.
+resolver.define('getConversion', async () => {
+  const conversion = (await kvs.get('conversion')) ?? {};
+  const epicKeys = Object.values(conversion)
+    .filter(c => c.status === 'converted' && c.epicKey)
+    .map(c => c.epicKey);
+
+  const epicProjectByKey = {};
+  if (epicKeys.length) {
+    const jql = encodeURIComponent(`key in (${epicKeys.join(',')})`);
+    try {
+      let res = await asUser().requestJira(
+        route`/rest/api/3/search?jql=${jql}&maxResults=${epicKeys.length}&fields=project`,
+        { headers: { Accept: 'application/json' } }
+      );
+      if (res.status === 410 || res.status === 404) {
+        res = await asUser().requestJira(route`/rest/api/3/search/jql`, {
+          method: 'POST',
+          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jql: `key in (${epicKeys.join(',')})`, maxResults: epicKeys.length, fields: ['project'] }),
+        });
+      }
+      if (res.ok) {
+        const body = await res.json();
+        (body.issues || []).forEach(i => { epicProjectByKey[i.key] = i.fields.project?.key ?? null; });
+      }
+    } catch { /* best-effort — mismatch detection just won't show if this fails */ }
+  }
+
+  // Map idea key -> the epic's CURRENT project key (null if epic was deleted/inaccessible)
+  const epicProjectByIdea = {};
+  Object.entries(conversion).forEach(([ideaKey, c]) => {
+    if (c.status === 'converted' && c.epicKey) epicProjectByIdea[ideaKey] = epicProjectByKey[c.epicKey] ?? null;
+  });
+
+  return { conversion, epicProjectByIdea };
+});
+
+// Convert an idea into a real Jira Epic (+ child Stories split across sprints) or a
+// single Story. Points are divided evenly across selected sprints (remainder to the
+// earliest sprints), each story moved into its sprint via the Agile API.
+resolver.define('convertIdea', async ({ payload }) => {
+  const { ideaKey, boardId, issueType, name, description, sprintIds = [], points = 0 } = payload;
+  const configRecord = await kvs.get('config');
+  const jiraCfg = configRecord?.jiraCfg ?? {};
+
+  if (!boardId) return { ok: false, error: 'This team has no Jira board linked. Set one on the Config page.' };
+
+  // Resolve the project live from the board rather than trusting a cached team.projectKey,
+  // which can be stale/missing for teams configured before board-mapping existed.
+  const boardRes = await asUser().requestJira(route`/rest/agile/1.0/board/${boardId}`, { headers: { Accept: 'application/json' } });
+  if (!boardRes.ok) return { ok: false, error: `Could not look up the linked board (${boardRes.status}).` };
+  const boardBody = await boardRes.json();
+  const projectKey = boardBody.location?.projectKey;
+  if (!projectKey) return { ok: false, error: 'The linked board has no associated project.' };
+
+  const createIssue = async (summary, parentKey) => {
+    const fields = {
+      project: { key: projectKey },
+      issuetype: { name: parentKey ? 'Story' : issueType },
+      summary,
+      description: adfDoc(description),
+    };
+    if (parentKey) fields.parent = { key: parentKey };
+    const res = await asUser().requestJira(route`/rest/api/3/issue`, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      const fieldError = body.errors && Object.values(body.errors)[0];
+      return { ok: false, error: body.errorMessages?.[0] ?? fieldError ?? `${res.status}` };
+    }
+    return { ok: true, key: body.key };
+  };
+
+  const moveToSprint = (issueKey, sprintId) =>
+    asUser().requestJira(route`/rest/agile/1.0/sprint/${sprintId}/issue`, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ issues: [issueKey] }),
+    }).catch(() => {});
+
+  let epicKey = null;
+  const storyKeys = [];
+
+  if (issueType === 'Epic') {
+    const epic = await createIssue(name, null);
+    if (!epic.ok) return { ok: false, error: epic.error };
+    epicKey = epic.key;
+
+    if (sprintIds.length) {
+      const per = Math.floor(points / sprintIds.length);
+      const rem = points - per * sprintIds.length;
+      for (let i = 0; i < sprintIds.length; i++) {
+        const story = await createIssue(`${name} — part ${i + 1}`, epicKey);
+        if (!story.ok) continue; // best-effort — one failed child shouldn't block the rest
+        const storyPts = per + (i < rem ? 1 : 0);
+        await tryWritePoints(story.key, storyPts, jiraCfg.sizeField);
+        await moveToSprint(story.key, sprintIds[i]);
+        storyKeys.push(story.key);
+      }
+    }
+  } else {
+    const story = await createIssue(name, null);
+    if (!story.ok) return { ok: false, error: story.error };
+    await tryWritePoints(story.key, points, jiraCfg.sizeField);
+    if (sprintIds.length) await moveToSprint(story.key, sprintIds[0]);
+    storyKeys.push(story.key);
+  }
+
+  const conversion = (await kvs.get('conversion')) ?? {};
+  conversion[ideaKey] = {
+    status: 'converted', epicKey, storyKeys, sprintIds, project: projectKey, type: issueType, name, desc: description, pts: points,
+  };
+  await kvs.set('conversion', conversion);
+
+  // Auto-advance the idea's lifecycle status to Doing
+  const doingStatus = jiraCfg.statusMap?.Doing;
+  if (doingStatus) await transitionIssueTo(ideaKey, doingStatus).catch(() => {});
+
+  return { ok: true, epicKey, storyKeys, project: projectKey };
+});
+
+// Unlink a converted idea. Only clears OUR tracking — the real Jira issues are left
+// exactly as they are; this is a link removal, not a delete.
+resolver.define('undoConvert', async ({ payload }) => {
+  const { ideaKey } = payload;
+  const conversion = (await kvs.get('conversion')) ?? {};
+  const allocPts = conversion[ideaKey]?.pts ?? 0;
+  conversion[ideaKey] = { status: 'not' };
+  await kvs.set('conversion', conversion);
+  return { ok: true, allocPts };
 });
 
 exports.handler = resolver.getDefinitions();

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { invoke, router } from '@forge/bridge';
 import { withSaving } from '../utils/saving';
+import IssueKey from '../components/IssueKey';
 
 const SESSION_KEY = 'cpw:lastVersionId';
 
@@ -20,6 +21,19 @@ function fmtDate(iso) {
 
 function initials(name) {
   return (name || '?').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+}
+
+const SIZES = ['XS', 'S', 'M', 'L', 'XL'];
+
+function riceScore(idea) {
+  const { reach, impact, effort, confidence } = idea;
+  if (!effort) return null;
+  return Math.round((reach * impact * ((confidence ?? 0) / 100)) / effort * 10) / 10;
+}
+
+function sizeFromPoints(pts, scale) {
+  if (pts == null) return null;
+  return SIZES.find(s => scale?.[s] === pts) ?? String(pts);
 }
 
 // ── Sprint Lozenge ────────────────────────────────────────────────────────────
@@ -445,6 +459,484 @@ function InlineCapacityEditor({ overrideKey, basePts, ov, onCapChange }) {
   );
 }
 
+// ── RICE popover (mirrors IdeaTable's, kept local since that one isn't exported) ─
+function DotRating({ value, max = 5, onChange, color }) {
+  return (
+    <span style={{ display: 'inline-flex', gap: 4 }}>
+      {Array.from({ length: max }, (_, i) => i + 1).map(n => {
+        const filled = n <= (value ?? 0);
+        return (
+          <button key={n} type="button" onClick={() => onChange(n === value ? 0 : n)}
+            style={{ width: 18, height: 18, borderRadius: '50%', border: 'none', cursor: 'pointer', padding: 0,
+              background: filled ? color : 'var(--surface-sunken)',
+              boxShadow: filled ? 'none' : 'inset 0 0 0 1.5px var(--border)',
+            }} title={String(n)} />
+        );
+      })}
+    </span>
+  );
+}
+
+function RicePopover({ idea, onClose, onSave }) {
+  const [r, setR] = useState(idea.reach ?? 0);
+  const [im, setIm] = useState(idea.impact ?? 0);
+  const [ef, setEf] = useState(idea.effort ?? 0);
+  const [co, setCo] = useState(idea.confidence ?? 0);
+  const score = ef > 0 ? Math.round((r * im * (co / 100)) / ef * 10) / 10 : null;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 10, padding: 24, width: 340, boxShadow: '0 8px 32px rgba(9,30,66,.24)', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>RICE Score</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-subtlest)', fontSize: 18, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-subtle)', fontWeight: 500 }}>{idea.title}</div>
+        {[['Reach', '#E0A800', r, setR], ['Impact', '#6E93F5', im, setIm], ['Effort', '#EE8C86', ef, setEf]].map(([label, color, val, set]) => (
+          <div key={label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 13, color: 'var(--text-subtle)', width: 70 }}>{label}</span>
+            <DotRating value={val} color={color} onChange={v => set(v)} />
+          </div>
+        ))}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 13, color: 'var(--text-subtle)', width: 70 }}>Confidence</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <input type="number" min="0" max="100" value={co}
+              onChange={e => setCo(Math.min(100, Math.max(0, parseInt(e.target.value, 10) || 0)))}
+              style={{ width: 60, border: '1px solid var(--border)', borderRadius: 4, padding: '4px 6px', fontSize: 13, textAlign: 'right', fontFamily: 'ui-monospace,monospace', color: 'var(--text)', background: 'var(--surface)', outline: 'none' }} />
+            <span style={{ fontSize: 13, color: 'var(--text-subtlest)' }}>%</span>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 8, borderTop: '1px solid var(--border)' }}>
+          <span style={{ fontSize: 12, color: 'var(--text-subtle)' }}>RICE score</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 72, padding: '5px 14px', borderRadius: 5, background: score > 0 ? 'var(--ok-bg)' : 'var(--surface-sunken)', color: score > 0 ? 'var(--ok-text)' : 'var(--text-subtlest)', fontSize: 16, fontWeight: 800 }}>
+            {score > 0 ? score : '—'}
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '6px 14px', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', color: 'var(--text)' }}>Cancel</button>
+          <button onClick={() => onSave({ reach: r, impact: im, effort: ef, confidence: co })} style={{ background: 'var(--brand)', color: '#fff', border: 'none', borderRadius: 4, padding: '6px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Convert (create Epic/Story) dialog ────────────────────────────────────────
+function ConvertDialog({ idea, team, scale, teamSprints, getCap, issueType, saving, error, onCreate, onCancel }) {
+  const [name, setName] = useState(idea.title || '');
+  const [desc, setDesc] = useState('');
+  const [sprintIds, setSprintIds] = useState([]);
+  const [size, setSize] = useState(() => {
+    const s = sizeFromPoints(idea.size, scale);
+    return SIZES.includes(s) ? s : 'M';
+  });
+  const points = scale?.[size] ?? 0;
+  const canCreate = name.trim().length > 0 && sprintIds.length > 0 && !!team?.boardId;
+
+  const toggleSprint = (id) => setSprintIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+  const selectedSorted = [...sprintIds];
+  const per = selectedSorted.length ? Math.floor(points / selectedSorted.length) : 0;
+
+  return (
+    <div onClick={onCancel} style={{ position: 'fixed', inset: 0, background: 'rgba(9,30,66,0.42)', zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', borderRadius: 8, boxShadow: '0 12px 40px rgba(0,0,0,.3)', width: 520, maxWidth: '100%', padding: 24 }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>Create {issueType}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 4 }}>{team?.name} · links back to the idea and the release version</div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 90px', gap: 12, marginTop: 18, alignItems: 'end' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-subtle)' }}>Size</label>
+            <select value={size} onChange={e => setSize(e.target.value)}
+              style={{ appearance: 'none', WebkitAppearance: 'none', border: '1px solid var(--border)', borderRadius: 4, padding: '8px 24px 8px 10px', fontSize: 13, fontFamily: 'inherit', background: 'var(--surface) url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'10\' height=\'6\'%3E%3Cpath d=\'M0 0l5 6 5-6z\' fill=\'%236B778C\'/%3E%3C/svg%3E") no-repeat right 8px center', cursor: 'pointer', color: 'var(--text)', outline: 'none' }}>
+              {SIZES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-subtle)' }}>Points</label>
+            <div style={{ padding: '9px 4px', fontSize: 14, fontWeight: 700, color: 'var(--text)', textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{points}</div>
+          </div>
+        </div>
+
+        {!team?.boardId && (
+          <div style={{ marginTop: 14, fontSize: 12, color: 'var(--over-text)', background: 'var(--over-bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px' }}>
+            This team has no Jira board linked. Set one on the Config page before converting.
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 16 }}>
+          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-subtle)' }}>
+            Add to sprints <span style={{ fontWeight: 500, color: 'var(--text-subtlest)' }}>— allocates points to the waterline</span>
+          </label>
+          {teamSprints.length > 0 ? (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {teamSprints.map(sp => {
+                  const checked = sprintIds.includes(sp.id);
+                  const cap = getCap(sp.id);
+                  return (
+                    <div key={sp.id} onClick={() => toggleSprint(sp.id)}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid ' + (checked ? 'var(--brand)' : 'var(--border)'), background: checked ? 'var(--surface-sunken)' : 'var(--surface)' }}>
+                      <span style={checked
+                        ? { width: 17, height: 17, borderRadius: 4, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--brand)', color: '#fff', fontSize: 11, fontWeight: 800, border: '1px solid var(--brand)' }
+                        : { width: 17, height: 17, borderRadius: 4, flexShrink: 0, background: 'var(--surface)', border: '1.5px solid var(--border)' }
+                      }>{checked ? '✓' : ''}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{sp.name}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-subtlest)' }}>{fmtDate(sp.startDate)} – {fmtDate(sp.endDate)}</div>
+                      </div>
+                      <span style={{ fontSize: 11, color: 'var(--text-subtle)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>cap {cap}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 2 }}>
+                {sprintIds.length
+                  ? `${points} pts across ${sprintIds.length} sprint${sprintIds.length === 1 ? '' : 's'} (~${per} each)`
+                  : 'Select at least one sprint to allocate this work to the waterline.'}
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: 'var(--text-subtle)', background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px' }}>
+              No sprints selected for this team. Pick sprints in Sprints &amp; Capacity to allocate this work.
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 16 }}>
+          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-subtle)' }}>{issueType} name</label>
+          <input value={name} onChange={e => setName(e.target.value)}
+            style={{ border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)', color: 'var(--text)', padding: '9px 10px', fontSize: 14, fontFamily: 'inherit', outline: 'none' }} />
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 14 }}>
+          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-subtle)' }}>Description</label>
+          <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="What is this work and why? (optional)"
+            style={{ border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)', color: 'var(--text)', padding: '9px 10px', fontSize: 14, fontFamily: 'inherit', outline: 'none', minHeight: 96, resize: 'vertical', lineHeight: 1.45 }} />
+        </div>
+        {error && <div style={{ marginTop: 12, fontSize: 12, color: 'var(--over-text)' }}>{error}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
+          <button onClick={onCancel} disabled={saving} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '8px 16px', fontSize: 14, fontWeight: 600, color: 'var(--text-subtle)', cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button
+            disabled={!canCreate || saving}
+            onClick={() => canCreate && onCreate({ name: name.trim(), description: desc, sprintIds, points, size })}
+            style={{ background: (canCreate && !saving) ? 'var(--brand)' : 'var(--surface-sunken)', color: (canCreate && !saving) ? '#fff' : 'var(--text-subtlest)', border: (canCreate && !saving) ? 'none' : '1px solid var(--border)', borderRadius: 4, padding: '8px 16px', fontSize: 14, fontWeight: 600, cursor: (canCreate && !saving) ? 'pointer' : 'default', fontFamily: 'inherit' }}
+          >
+            {saving ? 'Creating…' : `Create ${issueType}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Undo-link confirmation dialog ─────────────────────────────────────────────
+function UndoDialog({ idea, issueKey, saving, onConfirm, onCancel }) {
+  return (
+    <div onClick={onCancel} style={{ position: 'fixed', inset: 0, background: 'rgba(9,30,66,0.42)', zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', borderRadius: 8, boxShadow: '0 12px 40px rgba(0,0,0,.3)', width: 460, maxWidth: '100%', padding: 24 }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>Undo link for "{idea.title}"?</div>
+        <div style={{ fontSize: 14, color: 'var(--text-subtle)', lineHeight: 1.5, marginTop: 10 }}>
+          This unlinks issue <strong style={{ fontFamily: 'ui-monospace,monospace' }}>{issueKey}</strong> from the idea and marks it not converted. The Jira issue itself is not deleted.
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
+          <button onClick={onCancel} disabled={saving} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '8px 16px', fontSize: 14, fontWeight: 600, color: 'var(--text-subtle)', cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button onClick={onConfirm} disabled={saving} style={{ background: 'var(--over)', color: '#fff', border: 'none', borderRadius: 4, padding: '8px 16px', fontSize: 14, fontWeight: 600, cursor: saving ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+            {saving ? 'Undoing…' : 'Undo link'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Convert Ideas stage ────────────────────────────────────────────────────────
+function ConvertIdeasStage({
+  ideas, teams, versionId, scale, siteUrl, sprintsByTeam, selection, overrides,
+  conversion, epicProjectByIdea, loading,
+  onTeamChange, onRiceChange, onSizeChange, onReorder, onConvertDone, onUndoDone,
+}) {
+  const [collapsed, setCollapsed] = useState({});
+  const [pendingType, setPendingType] = useState({});
+  const [ricePopoverFor, setRicePopoverFor] = useState(null);
+  const [convertDialogIdea, setConvertDialogIdea] = useState(null);
+  const [convertSaving, setConvertSaving] = useState(false);
+  const [convertError, setConvertError] = useState(null);
+  const [undoDialogIdea, setUndoDialogIdea] = useState(null);
+  const [undoSaving, setUndoSaving] = useState(false);
+  const [dragKey, setDragKey] = useState(null);
+  const [dragOverKey, setDragOverKey] = useState(null);
+
+  const teamById = Object.fromEntries(teams.map(t => [t.id, t]));
+
+  const convIdeas = ideas.filter(i => i.release === versionId && i.team);
+  const convTotal = convIdeas.length;
+  const convDoneCount = convIdeas.filter(i => conversion[i.key]?.status === 'converted').length;
+  const convEmpty = convTotal === 0;
+
+  const byTeam = {};
+  convIdeas.forEach(i => { (byTeam[i.team] = byTeam[i.team] || []).push(i); });
+  const groups = teams.filter(t => byTeam[t.id]?.length).map(t => ({ team: t, ideas: byTeam[t.id] }));
+
+  const getCapFor = (teamId, sprintId) => {
+    const ov = overrides[`${teamId}:${sprintId}`];
+    if (ov?.pts != null) return ov.pts;
+    return teamById[teamId]?.sprintCap ?? 0;
+  };
+
+  const dialogIdea = convertDialogIdea ? convIdeas.find(i => i.key === convertDialogIdea) : null;
+  const dialogTeam = dialogIdea ? teamById[dialogIdea.team] : null;
+  const dialogTeamSprints = dialogTeam
+    ? (sprintsByTeam[dialogTeam.id] || []).filter(sp => (selection[dialogTeam.id] || []).includes(sp.id))
+      .sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''))
+    : [];
+
+  const undoIdea = undoDialogIdea ? convIdeas.find(i => i.key === undoDialogIdea) : null;
+  const undoRecord = undoDialogIdea ? conversion[undoDialogIdea] : null;
+
+  const handleCreate = async ({ name, description, sprintIds, points, size }) => {
+    const idea = dialogIdea; const team = dialogTeam;
+    if (!idea) return;
+    if (!team?.boardId) { setConvertError('This team has no Jira board linked. Set one on the Config page.'); return; }
+    const issueType = pendingType[idea.key] || 'Epic';
+    setConvertSaving(true); setConvertError(null);
+    try {
+      const res = await withSaving(() => invoke('convertIdea', {
+        ideaKey: idea.key, boardId: team.boardId, issueType, name, description, sprintIds, points,
+      }));
+      if (!res.ok) { setConvertError(res.error || 'Failed to convert'); return; }
+      if (points !== idea.size) {
+        invoke('updateIdeaSize', { issueKey: idea.key, points }).catch(() => {});
+        onSizeChange(idea.key, points);
+      }
+      onConvertDone(idea.key, {
+        status: 'converted', epicKey: res.epicKey, storyKeys: res.storyKeys, sprintIds,
+        project: res.project || team.projectKey, type: issueType, name, desc: description, pts: points,
+      });
+      setConvertDialogIdea(null);
+    } catch (e) {
+      setConvertError(String(e.message || e));
+    } finally {
+      setConvertSaving(false);
+    }
+  };
+
+  const handleUndo = async () => {
+    if (!undoDialogIdea) return;
+    setUndoSaving(true);
+    try {
+      await withSaving(() => invoke('undoConvert', { ideaKey: undoDialogIdea }));
+      onUndoDone(undoDialogIdea);
+      setUndoDialogIdea(null);
+    } finally {
+      setUndoSaving(false);
+    }
+  };
+
+  const ricePopoverIdea = ricePopoverFor ? convIdeas.find(i => i.key === ricePopoverFor) : null;
+
+  return (
+    <>
+      {ricePopoverIdea && (
+        <RicePopover idea={ricePopoverIdea} onClose={() => setRicePopoverFor(null)}
+          onSave={vals => { onRiceChange(ricePopoverIdea.key, vals); setRicePopoverFor(null); }} />
+      )}
+      {dialogIdea && (
+        <ConvertDialog
+          idea={dialogIdea} team={dialogTeam} scale={scale} teamSprints={dialogTeamSprints}
+          getCap={sprintId => getCapFor(dialogTeam.id, sprintId)}
+          issueType={pendingType[dialogIdea.key] || 'Epic'}
+          saving={convertSaving} error={convertError}
+          onCreate={handleCreate}
+          onCancel={() => { setConvertDialogIdea(null); setConvertError(null); }}
+        />
+      )}
+      {undoIdea && (
+        <UndoDialog idea={undoIdea} issueKey={undoRecord?.epicKey || undoRecord?.storyKeys?.[0] || ''}
+          saving={undoSaving} onConfirm={handleUndo} onCancel={() => setUndoDialogIdea(null)} />
+      )}
+
+      <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Convert ideas to stories</div>
+            <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 2 }}>
+              {convDoneCount} of {convTotal} converted · links each new issue back to its idea and the release version
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: 'var(--surface-sunken)', borderBottom: '1px solid var(--border)', fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--text-subtlest)' }}>
+          <div style={{ width: 52 }}>Rank</div>
+          <div style={{ flex: 1 }}>Title</div>
+          <div style={{ width: 56 }}>RICE</div>
+          <div style={{ width: 64 }}>Size</div>
+          <div style={{ width: 170 }}>Team</div>
+          <div style={{ width: 100 }}>Type</div>
+          <div style={{ width: 170 }}>Status</div>
+        </div>
+
+        {loading ? (
+          <div style={{ padding: '50px 20px', textAlign: 'center', color: 'var(--text-subtlest)', fontSize: 14 }}>Loading…</div>
+        ) : convEmpty ? (
+          <div style={{ padding: '50px 20px', textAlign: 'center', color: 'var(--text-subtlest)', fontSize: 14 }}>
+            No ideas assigned to this release. Add ideas to this version in Release Planning to convert them here.
+          </div>
+        ) : (
+          groups.map(grp => {
+            const isCollapsed = !!collapsed[grp.team.id];
+            return (
+              <div key={grp.team.id}>
+                <div
+                  onClick={() => setCollapsed(c => ({ ...c, [grp.team.id]: !c[grp.team.id] }))}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={e => {
+                    e.preventDefault();
+                    if (dragKey) {
+                      const dragged = convIdeas.find(i => i.key === dragKey);
+                      if (dragged && conversion[dragKey]?.status !== 'converted' && dragged.team !== grp.team.id) {
+                        onTeamChange(dragKey, grp.team.id);
+                      }
+                    }
+                    setDragKey(null); setDragOverKey(null);
+                  }}
+                  title="Click to expand/collapse · drop here to move to the bottom of this team"
+                  style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', background: 'var(--surface-sunken)', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                >
+                  <span style={{ color: 'var(--text-subtlest)', fontSize: 11, width: 10, flexShrink: 0 }}>{isCollapsed ? '▸' : '▾'}</span>
+                  <span style={{ width: 20, height: 20, borderRadius: '50%', background: 'var(--brand)', color: '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, flexShrink: 0 }}>{initials(grp.team.name)}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--text-subtle)' }}>{grp.team.name}</span>
+                  <div style={{ flex: 1 }} />
+                  <span style={{ fontSize: 11, color: 'var(--text-subtlest)', fontVariantNumeric: 'tabular-nums' }}>
+                    {grp.ideas.length} idea{grp.ideas.length !== 1 ? 's' : ''} · {grp.ideas.filter(i => conversion[i.key]?.status === 'converted').length} converted · {grp.ideas.reduce((a, i) => a + (i.size ?? 0), 0)} pts
+                  </span>
+                </div>
+
+                {!isCollapsed && grp.ideas.map((idea, idx) => {
+                  const rec = conversion[idea.key];
+                  const converted = rec?.status === 'converted';
+                  const score = riceScore(idea);
+                  const mismatchProject = converted ? epicProjectByIdea[idea.key] : null;
+                  const mismatch = !!(mismatchProject && mismatchProject !== teamById[idea.team]?.projectKey);
+                  const mismatchTeam = mismatch ? teams.find(t => t.projectKey === mismatchProject) : null;
+                  const type = pendingType[idea.key] || 'Epic';
+                  const isDragging = dragKey === idea.key;
+                  const isDragOver = dragOverKey === idea.key;
+
+                  return (
+                    <div
+                      key={idea.key}
+                      draggable={!converted}
+                      onDragStart={() => setDragKey(idea.key)}
+                      onDragOver={e => { e.preventDefault(); setDragOverKey(idea.key); }}
+                      onDragLeave={() => setDragOverKey(null)}
+                      onDrop={e => {
+                        e.preventDefault();
+                        if (dragKey && dragKey !== idea.key) onReorder(dragKey, idea.key);
+                        setDragKey(null); setDragOverKey(null);
+                      }}
+                      onDragEnd={() => { setDragKey(null); setDragOverKey(null); }}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 12, padding: '9px 16px',
+                        borderBottom: '1px solid var(--border-subtle)', opacity: isDragging ? 0.4 : 1,
+                        borderTop: isDragOver ? '2px solid var(--brand)' : undefined,
+                        background: mismatch ? 'rgba(124,92,246,0.14)' : (converted ? 'var(--ok-bg)' : 'var(--surface)'),
+                      }}
+                    >
+                      <div style={{ width: 52, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {!converted && <span style={{ cursor: 'grab', color: 'var(--text-subtlest)', fontSize: 15, lineHeight: 1 }} title="Drag to reorder or across teams">⠿</span>}
+                        {converted && <span style={{ color: 'var(--text-subtlest)', fontSize: 12, lineHeight: 1 }} title="Converted — reorder within team only; can't move to another team">🔒</span>}
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-subtle)', fontVariantNumeric: 'tabular-nums' }}>{idx + 1}</span>
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <IssueKey issueKey={idea.key} siteUrl={siteUrl} /> {idea.title}
+                        </div>
+                        {mismatch && <div style={{ fontSize: 11, fontWeight: 600, color: '#6D4BD8' }}>⚠ Epic moved to {mismatchProject} in Jira</div>}
+                      </div>
+                      <div style={{ width: 56 }}>
+                        <button onClick={() => setRicePopoverFor(idea.key)}
+                          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '100%', padding: '3px 6px', borderRadius: 5, background: score > 0 ? 'var(--ok-bg)' : 'var(--lz-n-bg)', color: score > 0 ? 'var(--ok-text)' : 'var(--lz-n-text)', fontSize: 12, fontWeight: 800, fontVariantNumeric: 'tabular-nums', border: 'none', cursor: 'pointer', fontFamily: 'inherit' }}>
+                          {score > 0 ? score : '—'}
+                        </button>
+                      </div>
+                      <div style={{ width: 64, display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', fontFamily: 'ui-monospace,monospace' }}>{sizeFromPoints(idea.size, scale) ?? '—'}</span>
+                        <span style={{ fontSize: 10, color: 'var(--text-subtlest)' }}>{idea.size ?? 0} pts</span>
+                      </div>
+                      <div style={{ width: 170 }}>
+                        {!converted ? (
+                          <>
+                            <select value={idea.team} style={SEL_STYLE_SM}
+                              onChange={e => onTeamChange(idea.key, e.target.value)}>
+                              {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                            </select>
+                            <div style={{ fontSize: 10, color: 'var(--text-subtlest)', marginTop: 3, fontFamily: 'ui-monospace,monospace' }}>
+                              {teamById[idea.team]?.boardId
+                                ? (teamById[idea.team]?.projectKey || teamById[idea.team]?.boardName || 'board linked')
+                                : 'no board linked'}
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <span style={{ fontSize: 13, color: 'var(--text-subtle)' }}>{teamById[idea.team]?.name}</span>
+                            <div style={{ fontSize: 10, color: 'var(--text-subtlest)', marginTop: 3, fontFamily: 'ui-monospace,monospace' }}>{rec.project}</div>
+                          </>
+                        )}
+                      </div>
+                      <div style={{ width: 100 }}>
+                        {!converted ? (
+                          <select value={type} style={SEL_STYLE_SM} onChange={e => setPendingType(p => ({ ...p, [idea.key]: e.target.value }))}>
+                            <option value="Epic">Epic</option>
+                            <option value="Story">Story</option>
+                          </select>
+                        ) : (
+                          <span style={{ fontSize: 13, color: 'var(--text-subtle)' }}>{rec.type}</span>
+                        )}
+                      </div>
+                      <div style={{ width: 170 }}>
+                        {!converted ? (
+                          <button onClick={() => setConvertDialogIdea(idea.key)}
+                            style={{ background: 'var(--brand)', color: '#fff', border: 'none', borderRadius: 4, padding: '6px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                            Convert
+                          </button>
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <IssueKey issueKey={rec.epicKey || rec.storyKeys?.[0]} siteUrl={siteUrl} style={{ fontWeight: 600 }} />
+                            {mismatch && mismatchTeam && (
+                              <button onClick={() => onTeamChange(idea.key, mismatchTeam.id)} title="Move idea to match the epic's team"
+                                style={{ background: '#7C5CEF', color: '#fff', border: 'none', borderRadius: 4, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                                Move to {mismatchTeam.name}
+                              </button>
+                            )}
+                            <button onClick={() => setUndoDialogIdea(idea.key)}
+                              style={{ background: 'transparent', border: 'none', color: 'var(--text-subtlest)', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                              undo
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </>
+  );
+}
+
+const SEL_STYLE_SM = {
+  appearance: 'none', WebkitAppearance: 'none',
+  border: '1px solid var(--border)', borderRadius: 4,
+  padding: '4px 20px 4px 7px', fontSize: 12, fontFamily: 'inherit',
+  background: 'var(--surface) url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'10\' height=\'6\'%3E%3Cpath d=\'M0 0l5 6 5-6z\' fill=\'%236B778C\'/%3E%3C/svg%3E") no-repeat right 5px center',
+  cursor: 'pointer', color: 'var(--text)', outline: 'none', width: '100%',
+};
+
 // ── Stage stubs ──────────────────────────────────────────────────────────────
 function StageStub({ number, label, description, bullets }) {
   return (
@@ -474,7 +966,8 @@ const STAGES = [
 ];
 
 export default function DeliveryPlanningTab({ data }) {
-  const { teams = [], versions = [], config = {}, release = {}, siteUrl = '' } = data ?? {};
+  const { teams = [], versions = [], config = {}, release = {}, siteUrl = '', ideas = [] } = data ?? {};
+  const scale = config.scale ?? { XS: 1, S: 3, M: 8, L: 13, XL: 21 };
 
   const [versionId, setVersionId] = useState(() => {
     const stored = localStorage.getItem(SESSION_KEY);
@@ -500,6 +993,12 @@ export default function DeliveryPlanningTab({ data }) {
   // Local teams state so base capacity edits are reflected immediately
   const [localTeams, setLocalTeams] = useState(teams);
   useEffect(() => setLocalTeams(teams), [teams]);
+  // Local ideas mirror (full app-wide list, unfiltered) for Convert Ideas — same pattern as ReleasePlanningTab
+  const [localIdeas, setLocalIdeas] = useState(ideas);
+  useEffect(() => setLocalIdeas(ideas), [ideas]);
+  const [conversion, setConversion] = useState({});
+  const [epicProjectByIdea, setEpicProjectByIdea] = useState({});
+  const [convertLoading, setConvertLoading] = useState(false);
 
   // Load delivery data when version changes
   useEffect(() => {
@@ -687,6 +1186,62 @@ export default function DeliveryPlanningTab({ data }) {
     } finally { setSaving(false); }
   };
 
+  // ── Convert Ideas: idea-level handlers (mirrors ReleasePlanningTab's pattern —
+  // localIdeas is the FULL app-wide list so reordering/team changes stay consistent
+  // with the Release Planning board) ──────────────────────────────────────────
+  const handleIdeaTeamChange = useCallback((issueKey, teamId) => {
+    setLocalIdeas(prev => prev.map(i => i.key === issueKey ? { ...i, team: teamId } : i));
+    withSaving(() => invoke('updateIdeaTeam', { issueKey, teamId })).catch(console.error);
+  }, []);
+
+  const handleIdeaRiceChange = useCallback((issueKey, vals) => {
+    setLocalIdeas(prev => prev.map(i => i.key === issueKey ? { ...i, ...vals } : i));
+    withSaving(() => invoke('updateIdeaRice', { issueKey, ...vals })).catch(console.error);
+  }, []);
+
+  const handleIdeaReorder = useCallback((dragKey, dropKey) => {
+    setLocalIdeas(prev => {
+      const next = [...prev];
+      const from = next.findIndex(i => i.key === dragKey);
+      const to = next.findIndex(i => i.key === dropKey);
+      if (from === -1 || to === -1) return prev;
+      const [item] = next.splice(from, 1);
+      next.splice(to, 0, item);
+      withSaving(() => invoke('updateIdeaOrder', { order: next.map(i => i.key) })).catch(console.error);
+      return next;
+    });
+  }, []);
+
+  const loadConversion = useCallback(() => {
+    setConvertLoading(true);
+    invoke('getConversion').then(d => {
+      setConversion(d.conversion || {});
+      setEpicProjectByIdea(d.epicProjectByIdea || {});
+    }).catch(console.error).finally(() => setConvertLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (activeStage === 'convert') loadConversion();
+  }, [activeStage, loadConversion]);
+
+  const handleConvertDone = useCallback((ideaKey, record) => {
+    setConversion(prev => ({ ...prev, [ideaKey]: record }));
+  }, []);
+
+  const handleIdeaSizeChange = useCallback((issueKey, points) => {
+    setLocalIdeas(prev => prev.map(i => i.key === issueKey ? { ...i, size: points } : i));
+  }, []);
+
+  const handleUndoDone = useCallback((ideaKey) => {
+    setConversion(prev => ({ ...prev, [ideaKey]: { status: 'not' } }));
+    setEpicProjectByIdea(prev => {
+      if (!(ideaKey in prev)) return prev;
+      const next = { ...prev };
+      delete next[ideaKey];
+      return next;
+    });
+  }, []);
+
   const sprintsByTeam = deliveryData?.sprintsByTeam || {};
 
   const getCap = (teamId, sid) => {
@@ -815,16 +1370,24 @@ export default function DeliveryPlanningTab({ data }) {
               </div>
             )
           ) : activeStage === 'convert' ? (
-            <StageStub
-              number="2" label="Convert Ideas"
-              description={'Turn planned ideas into Jira epics for ' + (selectedVersion?.name || 'this release') + '. Converting an idea creates a Jira Epic in the team\'s mapped project and advances its status to Doing.'}
-              bullets={[
-                'List of release ideas by team, each with a Convert button',
-                'Creates Jira Epic in the team\'s project with matching story points',
-                'Sprint assignment: choose which sprint(s) the work spans',
-                'Mismatch warning if epic was later moved to another team\'s project',
-                'Idea status auto-advances to Doing on conversion',
-              ]}
+            <ConvertIdeasStage
+              ideas={localIdeas}
+              teams={localTeams}
+              versionId={versionId}
+              scale={scale}
+              siteUrl={siteUrl}
+              sprintsByTeam={sprintsByTeam}
+              selection={selection}
+              overrides={overrides}
+              conversion={conversion}
+              epicProjectByIdea={epicProjectByIdea}
+              loading={convertLoading}
+              onTeamChange={handleIdeaTeamChange}
+              onRiceChange={handleIdeaRiceChange}
+              onSizeChange={handleIdeaSizeChange}
+              onReorder={handleIdeaReorder}
+              onConvertDone={handleConvertDone}
+              onUndoDone={handleUndoDone}
             />
           ) : activeStage === 'waterline' ? (
             <StageStub

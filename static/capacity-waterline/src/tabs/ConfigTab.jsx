@@ -10,7 +10,7 @@ function newTeam() {
   return { id: `team-${Date.now()}`, name: '', sprintWeeks: 2, sprintCap: 20, sprintsPerRelease: 3, boardId: null, boardName: '' };
 }
 
-export default function ConfigTab({ data }) {
+export default function ConfigTab({ data, onRefresh }) {
   const cfg = data?.config ?? {};
 
   const [teams, setTeams] = useState(() => cfg.teams ?? []);
@@ -74,6 +74,10 @@ export default function ConfigTab({ data }) {
       });
       setSaved(true);
       setDirty(false);
+      // Other tabs (Delivery Planning) hold their own snapshot of `teams` from app
+      // load and never refetch on tab switch — refresh it now so board mappings
+      // (boardId/projectKey) saved here show up there immediately.
+      onRefresh?.();
     } finally {
       setSaving(false);
     }

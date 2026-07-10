@@ -79,7 +79,7 @@ export default function TabShell({ initialData, onRefresh, refreshing }) {
         </div>
       </header>
       <main className="tab-content">
-        {ActiveComponent && <ActiveComponent data={initialData} />}
+        {ActiveComponent && <ActiveComponent data={initialData} onRefresh={onRefresh} />}
       </main>
     </div>
   );
