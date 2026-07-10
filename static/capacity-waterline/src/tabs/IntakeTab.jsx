@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { invoke } from '@forge/bridge';
 import { withSaving } from '../utils/saving';
+import IssueKey from '../components/IssueKey';
 import Button from '../components/Button';
 import NativeSelect from '../components/NativeSelect';
 
@@ -88,7 +89,7 @@ function EditableTitle({ value, ideaKey, onChange }) {
 }
 
 export default function IntakeTab({ data }) {
-  const { ideas: allIdeas = [], teams = [], versions = [], config = {} } = data ?? {};
+  const { ideas: allIdeas = [], teams = [], versions = [], config = {}, siteUrl = '' } = data ?? {};
   const scale = config.scale ?? { XS: 1, S: 3, M: 8, L: 13, XL: 21 };
   const jiraCfg = config.jiraCfg ?? {};
   const statusMap = jiraCfg.statusMap ?? {};
@@ -330,7 +331,7 @@ export default function IntakeTab({ data }) {
                 <tr key={idea.key}
                   style={{ background: isBacklog ? 'rgba(124,92,246,0.06)' : undefined }}>
                   <td>
-                    <span className="idea-key">{idea.key}</span>
+                    <IssueKey issueKey={idea.key} siteUrl={siteUrl} style={{ marginRight: 6 }} />
                     <EditableTitle value={idea.title} ideaKey={idea.key} onChange={handleTitle} />
                   </td>
                   <td>

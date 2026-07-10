@@ -21,7 +21,7 @@ function rice(i) {
 }
 
 export default function ReleasePlanningTab({ data }) {
-  const { ideas = [], teams = [], versions = [], config = {}, currentUser } = data ?? {};
+  const { ideas = [], teams = [], versions = [], config = {}, currentUser, siteUrl = '' } = data ?? {};
   const scale   = config.scale   ?? { XS: 1, S: 3, M: 8, L: 13, XL: 21 };
   const jiraCfg = config.jiraCfg ?? {};
 
@@ -238,7 +238,7 @@ export default function ReleasePlanningTab({ data }) {
               <IdeaTable
                 ideas={localIdeas} teams={teams} versions={versions}
                 scale={scale} versionId={versionId} release={release}
-                teamFilter={teamFilter} statusMap={jiraCfg.statusMap}
+                teamFilter={teamFilter} statusMap={jiraCfg.statusMap} siteUrl={siteUrl}
                 onTeamChange={handleTeamChange} onVersionChange={handleVersionChange}
                 onStatusChange={handleStatusChange} onRiceChange={handleRiceChange}
                 onReorder={handleReorder}

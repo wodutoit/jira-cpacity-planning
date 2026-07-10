@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { withSaving } from '../utils/saving';
+import IssueKey from './IssueKey';
 
 const SIZES = ['XS', 'S', 'M', 'L', 'XL'];
 
@@ -125,7 +126,7 @@ function RicePopover({ idea, onClose, onSave }) {
 }
 
 export default function IdeaTable({
-  ideas, teams, versions, scale, versionId, versionIds,
+  ideas, teams, versions, scale, versionId, versionIds, siteUrl,
   release, teamFilter, onTeamChange, onVersionChange, onStatusChange, onRiceChange,
   onReorder, statusMap, versionFilterLabel, onVersionFilterClear,
 }) {
@@ -209,7 +210,7 @@ export default function IdeaTable({
         </td>
         {/* Title */}
         <td style={{ padding: '8px 8px 8px 0' }}>
-          <span style={{ fontSize: 12, color: 'var(--text-subtlest)', fontFamily: 'monospace', marginRight: 4 }}>{idea.key}</span>
+          <IssueKey issueKey={idea.key} siteUrl={siteUrl} />
           <span style={{ fontSize: 14, color: 'var(--brand)', fontWeight: 500 }}>{idea.title}</span>
         </td>
         {/* RICE — clickable pill opens popover */}
@@ -359,7 +360,7 @@ export default function IdeaTable({
                 <tr key={idea.key} style={{ background: 'var(--unassigned-bg)', borderBottom: '1px solid var(--border-subtle)' }}>
                   <td style={{ width: 52, padding: '8px 16px', textAlign: 'center', color: 'var(--text-subtlest)', fontSize: 13 }}>–</td>
                   <td style={{ padding: '8px 8px 8px 0' }}>
-                    <span style={{ fontSize: 12, color: 'var(--text-subtlest)', fontFamily: 'monospace', marginRight: 4 }}>{idea.key}</span>
+                    <IssueKey issueKey={idea.key} siteUrl={siteUrl} />
                     <span style={{ fontSize: 14, color: 'var(--brand)', fontWeight: 500 }}>{idea.title}</span>
                   </td>
                   <td style={{ width: 64, padding: '8px 4px' }} />

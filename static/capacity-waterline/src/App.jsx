@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@forge/bridge';
+import { invoke, view } from '@forge/bridge';
 import TabShell from './components/TabShell';
 
 export default function App() {
@@ -12,8 +12,11 @@ export default function App() {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     const lastVersionId = localStorage.getItem('cpw:lastVersionId');
-    return invoke('getAll', { versionId: lastVersionId })
-      .then(setData)
+    return Promise.all([
+      invoke('getAll', { versionId: lastVersionId }),
+      view.getContext().catch(() => ({})),
+    ])
+      .then(([result, ctx]) => setData({ ...result, siteUrl: ctx.siteUrl ?? '' }))
       .catch(err => setError(String(err)))
       .finally(() => { setLoading(false); setRefreshing(false); });
   }, []);

@@ -447,4 +447,184 @@ resolver.define('resolveUsers', async ({ payload }) => {
   return results.filter(Boolean);
 });
 
+// Fetch all boards the current user can access (used by Config tab board mapping).
+// No type filter — Next-gen and team-managed boards report as "software" not "scrum".
+resolver.define('getBoards', async () => {
+  try {
+    const res = await asUser().requestJira(
+      route`/rest/agile/1.0/board?maxResults=50`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { boards: [], error: `${res.status} ${text.slice(0, 120)}` };
+    }
+    const body = await res.json();
+    return {
+      boards: (body.values || []).map(b => ({
+        id: b.id,
+        name: b.name,
+        type: b.type || '',
+        projectKey: b.location?.projectKey || '',
+        projectName: b.location?.projectName || '',
+      })),
+    };
+  } catch (e) {
+    return { boards: [], error: String(e.message || e) };
+  }
+});
+
+// Load delivery planning data: sprints are ALWAYS fetched live from Jira — we never
+// cache sprint objects in app storage, only the selection (team -> [sprintId]) and
+// per-sprint capacity overrides (team:sprintId -> {pts, note}). Sprints in `selection`
+// that no longer exist on the team's board are reported back as `missingByTeam` so the
+// frontend can offer "recreate" or "remove from plan".
+resolver.define('getDelivery', async ({ payload }) => {
+  const { versionId } = payload;
+  const config = (await kvs.get('config')) ?? {};
+  const teams = config.teams ?? [];
+  const stored = (await kvs.get(`delivery:${versionId}`)) ?? { selection: {}, overrides: {} };
+  const selection = stored.selection || {};
+
+  const sprintsByTeam = {};
+  const teamsWithBoards = teams.filter(t => t.boardId);
+
+  await Promise.all(teamsWithBoards.map(async team => {
+    sprintsByTeam[team.id] = [];
+    try {
+      const sprintRes = await asUser().requestJira(
+        route`/rest/agile/1.0/board/${team.boardId}/sprint?state=active,future,closed&maxResults=50`,
+        { headers: { Accept: 'application/json' } }
+      );
+      if (sprintRes.ok) {
+        const sprintData = await sprintRes.json();
+        (sprintData.values || []).forEach(sp => {
+          sprintsByTeam[team.id].push({
+            id: sp.id,
+            name: sp.name,
+            goal: sp.goal || '',
+            state: sp.state,
+            startDate: sp.startDate || null,
+            endDate: sp.endDate || null,
+          });
+        });
+      }
+    } catch (e) {
+      console.error('Sprint fetch failed for team', team.id, e);
+    }
+  }));
+
+  // For teams without a board, populate with empty array
+  teams.forEach(t => { if (!sprintsByTeam[t.id]) sprintsByTeam[t.id] = []; });
+
+  // Detect selected sprint IDs that no longer exist on the team's board
+  const missingByTeam = {};
+  teams.forEach(t => {
+    const selIds = selection[t.id] || [];
+    const liveIds = new Set((sprintsByTeam[t.id] || []).map(sp => sp.id));
+    const missing = selIds.filter(id => !liveIds.has(id));
+    if (missing.length) missingByTeam[t.id] = missing;
+  });
+
+  const noBoards = teamsWithBoards.length === 0;
+
+  // Also load the release capacity for this version (used by coverage card)
+  const releaseRecord = (await kvs.get(`release:${versionId}`)) ?? {};
+
+  return {
+    sprintsByTeam,
+    selection,
+    overrides: stored.overrides || {},
+    missingByTeam,
+    boardError: noBoards ? 'no_team_board' : null,
+    releaseCapacity: releaseRecord.capacityByTeam || {},
+  };
+});
+
+// Persist sprint selection + capacity overrides for a version. No sprint objects are stored —
+// only IDs (selection) and pts/note keyed by team:sprintId (overrides).
+resolver.define('saveDelivery', async ({ payload }) => {
+  const { versionId, selection, overrides } = payload;
+  const existing = (await kvs.get(`delivery:${versionId}`)) ?? {};
+  await kvs.set(`delivery:${versionId}`, { ...existing, selection, overrides });
+  return { ok: true };
+});
+
+// Edit a sprint's name/goal/dates via the Agile API (write:sprint:jira-software scope).
+resolver.define('updateSprint', async ({ payload }) => {
+  const { sprintId, name, goal, startDate, endDate } = payload;
+
+  const body = { name };
+  if (goal != null) body.goal = goal;
+  if (startDate) body.startDate = new Date(startDate + 'T00:00:00.000Z').toISOString();
+  if (endDate) body.endDate = new Date(endDate + 'T00:00:00.000Z').toISOString();
+
+  // POST = partial update (only provided fields change). PUT is a full replace and
+  // requires every field including `state`, which fails with "Sprint state is required".
+  const res = await asUser().requestJira(route`/rest/agile/1.0/sprint/${sprintId}`, {
+    method: 'POST',
+    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `${res.status} ${text.slice(0, 200)}` };
+  }
+  const sp = await res.json();
+  return {
+    ok: true,
+    sprint: { id: sp.id, name: sp.name, goal: sp.goal || '', state: sp.state, startDate: sp.startDate || null, endDate: sp.endDate || null },
+  };
+});
+
+// Create a real sprint on the team's Jira board (write:sprint:jira-software scope).
+resolver.define('createSprint', async ({ payload }) => {
+  const { boardId, name, goal, startDate, endDate } = payload;
+  const body = { name, originBoardId: boardId };
+  if (goal) body.goal = goal;
+  if (startDate) body.startDate = new Date(startDate + 'T00:00:00.000Z').toISOString();
+  if (endDate) body.endDate = new Date(endDate + 'T00:00:00.000Z').toISOString();
+
+  const res = await asUser().requestJira(route`/rest/agile/1.0/sprint`, {
+    method: 'POST',
+    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `${res.status} ${text.slice(0, 200)}` };
+  }
+  const sp = await res.json();
+  return {
+    ok: true,
+    sprint: { id: sp.id, name: sp.name, goal: sp.goal || '', state: sp.state, startDate: sp.startDate || null, endDate: sp.endDate || null },
+  };
+});
+
+// Delete a sprint if it has no issues. If it has issues, refuse and let the
+// frontend point the user at the board instead (we don't silently bulk-move issues).
+resolver.define('deleteSprint', async ({ payload }) => {
+  const { sprintId } = payload;
+
+  const issueRes = await asUser().requestJira(
+    route`/rest/agile/1.0/sprint/${sprintId}/issue?maxResults=1&fields=key`,
+    { headers: { Accept: 'application/json' } }
+  );
+  if (issueRes.ok) {
+    const body = await issueRes.json();
+    const count = body.total ?? (body.issues || []).length;
+    if (count > 0) return { ok: false, nonEmpty: true, count };
+  } else if (issueRes.status !== 404) {
+    const text = await issueRes.text().catch(() => '');
+    return { ok: false, error: `${issueRes.status} ${text.slice(0, 200)}` };
+  }
+
+  const delRes = await asUser().requestJira(route`/rest/agile/1.0/sprint/${sprintId}`, { method: 'DELETE' });
+  if (!delRes.ok && delRes.status !== 404) {
+    const text = await delRes.text().catch(() => '');
+    return { ok: false, error: `${delRes.status} ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+});
+
 exports.handler = resolver.getDefinitions();

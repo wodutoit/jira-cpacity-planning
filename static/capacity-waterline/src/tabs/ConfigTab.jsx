@@ -7,7 +7,7 @@ const SIZES = ['XS', 'S', 'M', 'L', 'XL'];
 const DEFAULT_SCALE = { XS: 1, S: 3, M: 8, L: 13, XL: 21 };
 
 function newTeam() {
-  return { id: `team-${Date.now()}`, name: '', sprintWeeks: 2, sprintCap: 20, sprintsPerRelease: 3 };
+  return { id: `team-${Date.now()}`, name: '', sprintWeeks: 2, sprintCap: 20, sprintsPerRelease: 3, boardId: null, boardName: '' };
 }
 
 export default function ConfigTab({ data }) {
@@ -21,6 +21,9 @@ export default function ConfigTab({ data }) {
   const [adminsLoaded, setAdminsLoaded] = useState(false);
   const [editors, setEditors] = useState([]);
   const [editorsLoaded, setEditorsLoaded] = useState(false);
+  const [boards, setBoards] = useState([]);
+  const [boardsLoaded, setBoardsLoaded] = useState(false);
+  const [boardsError, setBoardsError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -35,6 +38,7 @@ export default function ConfigTab({ data }) {
     }
     resolveOrSet(cfg.admins ?? [], setAdmins, setAdminsLoaded);
     resolveOrSet(cfg.editors ?? [], setEditors, setEditorsLoaded);
+    invoke('getBoards').then(res => { setBoards(res.boards || []); if (res.error) setBoardsError(res.error); }).finally(() => setBoardsLoaded(true));
   }, []);
 
   const touch = () => { setDirty(true); setSaved(false); };
@@ -43,7 +47,15 @@ export default function ConfigTab({ data }) {
   const addTeam = () => { setTeams(t => [...t, newTeam()]); touch(); };
   const removeTeam = id => { setTeams(t => t.filter(x => x.id !== id)); touch(); };
   const updateTeam = (id, key, raw) => {
-    const val = key === 'name' ? raw : (parseInt(raw, 10) || 0);
+    let val;
+    if (key === 'name') val = raw;
+    else if (key === 'boardId') {
+      // raw is the selected board id string; also store boardName/projectKey for display and links
+      const board = boards.find(b => String(b.id) === String(raw));
+      setTeams(t => t.map(x => x.id === id ? { ...x, boardId: raw || null, boardName: board ? board.name : '', projectKey: board ? board.projectKey : '' } : x));
+      touch();
+      return;
+    } else val = parseInt(raw, 10) || 0;
     setTeams(t => t.map(x => x.id === id ? { ...x, [key]: val } : x));
     touch();
   };
@@ -86,6 +98,7 @@ export default function ConfigTab({ data }) {
           <thead>
             <tr>
               <th>Team name</th>
+              <th>Jira board</th>
               <th className="num">Sprint weeks</th>
               <th className="num">Sprint cap (pts)</th>
               <th className="num">Sprints / release</th>
@@ -96,7 +109,7 @@ export default function ConfigTab({ data }) {
           <tbody>
             {teams.length === 0 && (
               <tr className="empty-row">
-                <td colSpan={6}>No teams yet — add one below.</td>
+                <td colSpan={7}>No teams yet — add one below.</td>
               </tr>
             )}
             {teams.map(team => (
@@ -108,6 +121,31 @@ export default function ConfigTab({ data }) {
                     onChange={e => updateTeam(team.id, 'name', e.target.value)}
                     placeholder="e.g. Apollo"
                   />
+                </td>
+                <td>
+                  {boardsLoaded ? (
+                    boards.length === 0 ? (
+                      <span style={{ fontSize: 12, color: 'var(--text-subtlest)' }}>
+                        {boardsError ? `Error: ${boardsError}` : 'No boards found'}
+                      </span>
+                    ) : (
+                      <select
+                        className="config-input"
+                        style={{ minWidth: 180 }}
+                        value={team.boardId ?? ''}
+                        onChange={e => updateTeam(team.id, 'boardId', e.target.value)}
+                      >
+                        <option value="">— no board —</option>
+                        {boards.map(b => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}{b.projectKey ? ` (${b.projectKey})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )
+                  ) : (
+                    <span style={{ fontSize: 12, color: 'var(--text-subtlest)' }}>Loading…</span>
+                  )}
                 </td>
                 <td className="num">
                   <input

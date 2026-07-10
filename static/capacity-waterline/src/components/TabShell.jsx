@@ -40,7 +40,7 @@ export default function TabShell({ initialData, onRefresh, refreshing }) {
     <div className="app">
       <header className="app-header">
         <div className="app-wordmark">
-          <span className="app-badge">W</span>
+          <span className="app-badge">CW</span>
           Capacity Waterline
         </div>
         {tabs.map(tab => (
