@@ -1,11 +1,17 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { invoke } from '@forge/bridge';
+import { invoke, router } from '@forge/bridge';
 import { withSaving } from '../utils/saving';
 import WaterlineChart from '../components/WaterlineChart';
 import VersionChart from '../components/VersionChart';
 import IdeaTable from '../components/IdeaTable';
 
 const SESSION_KEY = 'cpw:lastVersionId';
+
+function fmtDate(iso) {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+  catch { return iso; }
+}
 
 const SEL_STYLE = {
   appearance: 'none', WebkitAppearance: 'none',
@@ -166,6 +172,21 @@ export default function ReleasePlanningTab({ data }) {
           {/* Version picker + unsaved/saved banners */}
           <div style={{ display: 'flex', alignItems: 'flex-end', gap: 24, flexWrap: 'wrap' }}>
             {VERSION_PICKER(v => { setVersionId(v); setDirty(false); setSaved(false); setTeamFilter(null); })}
+            {selectedVersion && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--text-subtlest)' }}>Target release date</label>
+                <span style={{ fontSize: 14, color: selectedVersion.releaseDate ? 'var(--text)' : 'var(--text-subtlest)', padding: '7px 0' }}>
+                  {selectedVersion.releaseDate ? fmtDate(selectedVersion.releaseDate) : 'Not set'}
+                </span>
+              </div>
+            )}
+            {(jiraCfg.releaseSpace || jiraCfg.ideaSpace) && (
+              <button type="button"
+                onClick={() => router.open(`${siteUrl}/projects/${jiraCfg.releaseSpace || jiraCfg.ideaSpace}?selectedItem=com.atlassian.jira.jira-projects-plugin%3Arelease-page`)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--brand)', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', padding: '7px 0', alignSelf: 'flex-end' }}>
+                Manage releases ↗
+              </button>
+            )}
             <div style={{ flex: 1 }} />
             {dirty && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--filling-bg)', border: '1px solid var(--filling-border)', borderRadius: 6, padding: '10px 12px 10px 14px' }}>

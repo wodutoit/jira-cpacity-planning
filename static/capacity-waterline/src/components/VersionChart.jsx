@@ -175,6 +175,11 @@ export default function VersionChart({
                 <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', fontFamily: 'ui-monospace,SFMono-Regular,monospace', textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%' }}>
                   {version.name}
                 </span>
+                {version.releaseDate && (
+                  <span style={{ fontSize: 10, color: 'var(--text-subtlest)' }}>
+                    {new Date(version.releaseDate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                  </span>
+                )}
                 <span style={{ fontSize: 11, color: 'var(--text-subtle)', fontVariantNumeric: 'tabular-nums' }}>
                   {totalAlloc} / {totalCapAll} pts
                 </span>

@@ -147,6 +147,34 @@ function SprintDialog({ mode, teamName, initial, saving, error, onSave, onCancel
   );
 }
 
+// ── Change target release date dialog ─────────────────────────────────────────
+function ReleaseDateDialog({ version, saving, error, onSave, onCancel }) {
+  const [date, setDate] = useState(version.releaseDate ? version.releaseDate.slice(0, 10) : '');
+  return (
+    <div onClick={onCancel} style={{ position: 'fixed', inset: 0, background: 'rgba(9,30,66,0.42)', zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--surface)', borderRadius: 8, boxShadow: '0 12px 40px rgba(0,0,0,.3)', width: 420, maxWidth: '100%', padding: 24 }}>
+        <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)' }}>Change target date — {version.name}</div>
+        <div style={{ fontSize: 13, color: 'var(--text-subtle)', lineHeight: 1.5, marginTop: 8 }}>
+          Updates the release date on the real Jira Version — this changes it for everyone, not just this app.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 16 }}>
+          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-subtle)' }}>Target date</label>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)}
+            style={{ border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)', color: 'var(--text)', padding: '9px 10px', fontSize: 14, fontFamily: 'inherit', outline: 'none' }} />
+        </div>
+        {error && <div style={{ marginTop: 12, fontSize: 12, color: 'var(--over-text)' }}>{error}</div>}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
+          <button onClick={onCancel} disabled={saving} style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '8px 16px', fontSize: 14, fontWeight: 600, color: 'var(--text-subtle)', cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button onClick={() => onSave(date || null)} disabled={saving}
+            style={{ background: 'var(--brand)', color: '#fff', border: 'none', borderRadius: 4, padding: '8px 16px', fontSize: 14, fontWeight: 600, cursor: saving ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Delete Sprint Dialog ───────────────────────────────────────────────────────
 // state: 'confirm' | 'deleting' | 'nonEmpty'
 function DeleteSprintDialog({ teamName, sprintName, state, count, error, boardHref, onConfirm, onCancel }) {
@@ -524,7 +552,7 @@ function RicePopover({ idea, onClose, onSave }) {
 }
 
 // ── Convert (create Epic/Story) dialog ────────────────────────────────────────
-function ConvertDialog({ idea, team, scale, teamSprints, getCap, issueType, saving, error, onCreate, onCancel }) {
+function ConvertDialog({ idea, team, scale, teamSprints, getCap, getAlloc, threshold, issueType, saving, error, onCreate, onCancel }) {
   const [name, setName] = useState(idea.title || '');
   const [desc, setDesc] = useState('');
   const [sprintIds, setSprintIds] = useState([]);
@@ -576,6 +604,8 @@ function ConvertDialog({ idea, team, scale, teamSprints, getCap, issueType, savi
                 {teamSprints.map(sp => {
                   const checked = sprintIds.includes(sp.id);
                   const cap = getCap(sp.id);
+                  const alloc = getAlloc?.(sp.id) ?? 0;
+                  const colors = BAND_COLORS[dStateOf(alloc, cap, threshold)];
                   return (
                     <div key={sp.id} onClick={() => toggleSprint(sp.id)}
                       style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid ' + (checked ? 'var(--brand)' : 'var(--border)'), background: checked ? 'var(--surface-sunken)' : 'var(--surface)' }}>
@@ -587,7 +617,10 @@ function ConvertDialog({ idea, team, scale, teamSprints, getCap, issueType, savi
                         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{sp.name}</div>
                         <div style={{ fontSize: 10, color: 'var(--text-subtlest)' }}>{fmtDate(sp.startDate)} – {fmtDate(sp.endDate)}</div>
                       </div>
-                      <span style={{ fontSize: 11, color: 'var(--text-subtle)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>cap {cap}</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--text-subtle)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 2, flex: '0 0 auto', background: colors.fill }} />
+                        {alloc}/{cap}
+                      </span>
                     </div>
                   );
                 })}
@@ -653,8 +686,8 @@ function UndoDialog({ idea, issueKey, saving, onConfirm, onCancel }) {
 
 // ── Convert Ideas stage ────────────────────────────────────────────────────────
 function ConvertIdeasStage({
-  ideas, teams, versionId, scale, siteUrl, sprintsByTeam, selection, overrides,
-  conversion, epicProjectByIdea, loading,
+  ideas, teams, versionId, scale, siteUrl, sprintsByTeam, selection, overrides, threshold,
+  conversion, loading, canEdit,
   onTeamChange, onRiceChange, onSizeChange, onReorder, onConvertDone, onUndoDone,
 }) {
   const [collapsed, setCollapsed] = useState({});
@@ -667,6 +700,15 @@ function ConvertIdeasStage({
   const [undoSaving, setUndoSaving] = useState(false);
   const [dragKey, setDragKey] = useState(null);
   const [dragOverKey, setDragOverKey] = useState(null);
+  const [wlData, setWlData] = useState(null);
+
+  // Same source the Waterline stage uses for already-allocated points per team+sprint —
+  // fetched here too so the convert dialog's sprint picker can show live fill state.
+  useEffect(() => {
+    if (!versionId) return;
+    invoke('getWaterline', { versionId }).then(setWlData).catch(() => setWlData(null));
+  }, [versionId]);
+  const getAlloc = (teamId, sprintId) => wlData?.alloc?.[`${teamId}:${sprintId}`] ?? 0;
 
   const teamById = Object.fromEntries(teams.map(t => [t.id, t]));
 
@@ -696,6 +738,7 @@ function ConvertIdeasStage({
   const undoRecord = undoDialogIdea ? conversion[undoDialogIdea] : null;
 
   const handleCreate = async ({ name, description, sprintIds, points, size }) => {
+    if (!canEdit) return;
     const idea = dialogIdea; const team = dialogTeam;
     if (!idea) return;
     if (!team?.boardId) { setConvertError('This team has no Jira board linked. Set one on the Config page.'); return; }
@@ -723,7 +766,7 @@ function ConvertIdeasStage({
   };
 
   const handleUndo = async () => {
-    if (!undoDialogIdea) return;
+    if (!canEdit || !undoDialogIdea) return;
     setUndoSaving(true);
     try {
       await withSaving(() => invoke('undoConvert', { ideaKey: undoDialogIdea }));
@@ -746,6 +789,8 @@ function ConvertIdeasStage({
         <ConvertDialog
           idea={dialogIdea} team={dialogTeam} scale={scale} teamSprints={dialogTeamSprints}
           getCap={sprintId => getCapFor(dialogTeam.id, sprintId)}
+          getAlloc={sprintId => getAlloc(dialogTeam.id, sprintId)}
+          threshold={threshold}
           issueType={pendingType[dialogIdea.key] || 'Epic'}
           saving={convertSaving} error={convertError}
           onCreate={handleCreate}
@@ -817,9 +862,6 @@ function ConvertIdeasStage({
                   const rec = conversion[idea.key];
                   const converted = rec?.status === 'converted';
                   const score = riceScore(idea);
-                  const mismatchProject = converted ? epicProjectByIdea[idea.key] : null;
-                  const mismatch = !!(mismatchProject && mismatchProject !== teamById[idea.team]?.projectKey);
-                  const mismatchTeam = mismatch ? teams.find(t => t.projectKey === mismatchProject) : null;
                   const type = pendingType[idea.key] || 'Epic';
                   const isDragging = dragKey === idea.key;
                   const isDragOver = dragOverKey === idea.key;
@@ -841,7 +883,7 @@ function ConvertIdeasStage({
                         display: 'flex', alignItems: 'center', gap: 12, padding: '9px 16px',
                         borderBottom: '1px solid var(--border-subtle)', opacity: isDragging ? 0.4 : 1,
                         borderTop: isDragOver ? '2px solid var(--brand)' : undefined,
-                        background: mismatch ? 'rgba(124,92,246,0.14)' : (converted ? 'var(--ok-bg)' : 'var(--surface)'),
+                        background: converted ? 'var(--ok-bg)' : 'var(--surface)',
                       }}
                     >
                       <div style={{ width: 52, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -853,7 +895,6 @@ function ConvertIdeasStage({
                         <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           <IssueKey issueKey={idea.key} siteUrl={siteUrl} /> {idea.title}
                         </div>
-                        {mismatch && <div style={{ fontSize: 11, fontWeight: 600, color: '#6D4BD8' }}>⚠ Epic moved to {mismatchProject} in Jira</div>}
                       </div>
                       <div style={{ width: 56 }}>
                         <button onClick={() => setRicePopoverFor(idea.key)}
@@ -897,19 +938,13 @@ function ConvertIdeasStage({
                       </div>
                       <div style={{ width: 170 }}>
                         {!converted ? (
-                          <button onClick={() => setConvertDialogIdea(idea.key)}
-                            style={{ background: 'var(--brand)', color: '#fff', border: 'none', borderRadius: 4, padding: '6px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          <button onClick={() => setConvertDialogIdea(idea.key)} disabled={!canEdit}
+                            style={{ background: canEdit ? 'var(--brand)' : 'var(--surface-sunken)', color: canEdit ? '#fff' : 'var(--text-subtlest)', border: canEdit ? 'none' : '1px solid var(--border)', borderRadius: 4, padding: '6px 14px', fontSize: 13, fontWeight: 600, cursor: canEdit ? 'pointer' : 'default', fontFamily: 'inherit' }}>
                             Convert
                           </button>
                         ) : (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             <IssueKey issueKey={rec.epicKey || rec.storyKeys?.[0]} siteUrl={siteUrl} style={{ fontWeight: 600 }} />
-                            {mismatch && mismatchTeam && (
-                              <button onClick={() => onTeamChange(idea.key, mismatchTeam.id)} title="Move idea to match the epic's team"
-                                style={{ background: '#7C5CEF', color: '#fff', border: 'none', borderRadius: 4, padding: '5px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                                Move to {mismatchTeam.name}
-                              </button>
-                            )}
                             <button onClick={() => setUndoDialogIdea(idea.key)}
                               style={{ background: 'transparent', border: 'none', color: 'var(--text-subtlest)', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
                               undo
@@ -1098,7 +1133,7 @@ function WaterlineCell({ active, alloc, cap, hasOverride, threshold, clickable, 
 // ── Waterline: cell drawer (work items in one team/sprint) ───────────────────────
 function WaterlineDrawer({
   team, sprint, alloc, cap, threshold, items, ideaById, moveMenuFor, moveSaving, moveError,
-  sprintDests, teamDests, smoothing, onMoveMenu, onMove, onClose,
+  sprintDests, teamDests, smoothing, canEdit, onMoveMenu, onMove, onClose,
 }) {
   const state = dStateOf(alloc, cap, threshold);
   const colors = BAND_COLORS[state];
@@ -1145,10 +1180,12 @@ function WaterlineDrawer({
                     {idea && <div style={{ fontSize: 11, color: '#6D4BD8', marginTop: 2 }}>★ {idea.title}</div>}
                     <div style={{ fontSize: 11, color: 'var(--text-subtlest)', marginTop: 2 }}>{it.status} · {it.estimate || 0} pts{!it.estimate ? ' (unpointed)' : ''}</div>
                   </div>
-                  <button onClick={() => onMoveMenu(it.key)} disabled={moveSaving}
-                    style={{ flexShrink: 0, background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 9px', fontSize: 11, fontWeight: 700, color: 'var(--text-subtle)', cursor: moveSaving ? 'default' : 'pointer', fontFamily: 'inherit' }}>
-                    Move ▾
-                  </button>
+                  {canEdit && (
+                    <button onClick={() => onMoveMenu(it.key)} disabled={moveSaving}
+                      style={{ flexShrink: 0, background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 4, padding: '4px 9px', fontSize: 11, fontWeight: 700, color: 'var(--text-subtle)', cursor: moveSaving ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                      Move ▾
+                    </button>
+                  )}
                 </div>
                 {moveMenuFor === it.key && (
                   <div style={{ marginTop: 10, borderTop: '1px solid var(--border-subtle)', paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1187,7 +1224,7 @@ function WaterlineDrawer({
 }
 
 // ── Waterline stage ────────────────────────────────────────────────────────────
-function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, overrides, threshold, releaseDate, ideas, conversion, statusMap, onMarkIdeaDone }) {
+function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, overrides, threshold, releaseDate, ideas, conversion, statusMap, canEdit, onMarkIdeaDone }) {
   const [wlData, setWlData] = useState(null);
   const [wlLoading, setWlLoading] = useState(true);
   const [wlError, setWlError] = useState(null);
@@ -1238,6 +1275,7 @@ function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, o
   const unpointed = wlData?.unpointed ?? 0;
 
   const handleMove = async (issueKey, toTeamId, toSprintId) => {
+    if (!canEdit) return;
     setMoveSaving(true); setMoveError(null);
     try {
       const res = await withSaving(() => invoke('moveWaterlineItem', { issueKey, toTeamId, toSprintId }));
@@ -1294,6 +1332,7 @@ function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, o
           sprintDests={drawerSprintDests}
           teamDests={drawerTeamDests}
           smoothing={drawerSmoothing}
+          canEdit={canEdit}
           onMoveMenu={key => { setMoveMenuFor(prev => prev === key ? null : key); setMoveError(null); }}
           onMove={handleMove}
           onClose={() => { setDrawer(null); setMoveMenuFor(null); }}
@@ -1420,7 +1459,7 @@ function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, o
                         <div style={{ width: 70, fontSize: 12, fontWeight: 700, color: 'var(--text)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                           {it.estimate}{it.type === 'epic' ? ' (Σ)' : ''}
                         </div>
-                        {showDone && (
+                        {showDone && canEdit && (
                           <button onClick={() => onMarkIdeaDone(idea.key)}
                             style={{ background: 'var(--ok)', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 9px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
                             ✓ Mark idea Done
@@ -1446,9 +1485,17 @@ const STAGES = [
   { id: 'waterline', n: '3', label: 'Waterline' },
 ];
 
-export default function DeliveryPlanningTab({ data }) {
-  const { teams = [], versions = [], config = {}, release = {}, siteUrl = '', ideas = [] } = data ?? {};
+export default function DeliveryPlanningTab({ data, onRefresh }) {
+  const { teams = [], versions = [], config = {}, release = {}, siteUrl = '', ideas = [], currentUser } = data ?? {};
   const scale = config.scale ?? { XS: 1, S: 3, M: 8, L: 13, XL: 21 };
+
+  // Same editors/admins gate as ReleasePlanningTab — this tab had no write-access
+  // enforcement at all until now, so every mutation below checks canEdit first.
+  const editors = config.editors ?? [];
+  const admins = config.admins ?? [];
+  const me = currentUser?.accountId;
+  const canEdit = !editors.length || editors.some(e => e.accountId === me)
+                || !admins.length || admins.some(a => a.accountId === me);
 
   const [versionId, setVersionId] = useState(() => {
     const stored = localStorage.getItem(SESSION_KEY);
@@ -1471,6 +1518,9 @@ export default function DeliveryPlanningTab({ data }) {
   const [deleteState, setDeleteState] = useState('confirm'); // 'confirm' | 'deleting' | 'nonEmpty'
   const [deleteCount, setDeleteCount] = useState(0);
   const [deleteError, setDeleteError] = useState(null);
+  const [showDateDialog, setShowDateDialog] = useState(false);
+  const [dateSaving, setDateSaving] = useState(false);
+  const [dateError, setDateError] = useState(null);
   // Local teams state so base capacity edits are reflected immediately
   const [localTeams, setLocalTeams] = useState(teams);
   useEffect(() => setLocalTeams(teams), [teams]);
@@ -1478,7 +1528,6 @@ export default function DeliveryPlanningTab({ data }) {
   const [localIdeas, setLocalIdeas] = useState(ideas);
   useEffect(() => setLocalIdeas(ideas), [ideas]);
   const [conversion, setConversion] = useState({});
-  const [epicProjectByIdea, setEpicProjectByIdea] = useState({});
   const [convertLoading, setConvertLoading] = useState(false);
 
   // Load delivery data when version changes
@@ -1499,6 +1548,7 @@ export default function DeliveryPlanningTab({ data }) {
   useEffect(() => { if (versionId) localStorage.setItem(SESSION_KEY, versionId); }, [versionId]);
 
   const toggleSprint = useCallback((teamId, sprintId) => {
+    if (!canEdit) return;
     setSelection(prev => {
       const curr = [...(prev[teamId] || [])];
       const idx = curr.indexOf(sprintId);
@@ -1506,7 +1556,7 @@ export default function DeliveryPlanningTab({ data }) {
       return { ...prev, [teamId]: curr };
     });
     setDirty(true); setSaved(false);
-  }, []);
+  }, [canEdit]);
 
   const toggleSection = useCallback((teamId) => {
     setCollapsed(prev => ({ ...prev, [teamId]: !prev[teamId] }));
@@ -1514,6 +1564,7 @@ export default function DeliveryPlanningTab({ data }) {
 
   // Capacity override: key = "${teamId}:${sprintId}", pts=null means remove override
   const handleCapChange = useCallback((overrideKey, pts, note) => {
+    if (!canEdit) return;
     setOverrides(prev => {
       if (pts == null && !note) {
         const next = { ...prev };
@@ -1523,10 +1574,11 @@ export default function DeliveryPlanningTab({ data }) {
       return { ...prev, [overrideKey]: { pts, note } };
     });
     setDirty(true); setSaved(false);
-  }, []);
+  }, [canEdit]);
 
   // Create a real sprint on the team's Jira board via the Agile API.
   const handleSaveNewSprint = useCallback(async (teamId, { name, goal, start, end }) => {
+    if (!canEdit) return;
     const team = localTeams.find(t => t.id === teamId);
     if (!team?.boardId) { setSprintError('This team has no Jira board mapped.'); return; }
     setSprintSaving(true);
@@ -1551,10 +1603,11 @@ export default function DeliveryPlanningTab({ data }) {
     } finally {
       setSprintSaving(false);
     }
-  }, [localTeams]);
+  }, [localTeams, canEdit]);
 
   // Edit an existing sprint via the Agile API (write:sprint:jira-software scope).
   const handleSaveEditSprint = useCallback(async (teamId, sprint, { name, goal, start, end }) => {
+    if (!canEdit) return;
     setSprintSaving(true);
     setSprintError(null);
     try {
@@ -1574,7 +1627,7 @@ export default function DeliveryPlanningTab({ data }) {
     } finally {
       setSprintSaving(false);
     }
-  }, []);
+  }, [canEdit]);
 
   const openDeleteSprint = useCallback((teamId, sprint) => {
     setDeletingSprint({ teamId, sprint });
@@ -1586,7 +1639,7 @@ export default function DeliveryPlanningTab({ data }) {
   const closeDeleteDialog = useCallback(() => setDeletingSprint(null), []);
 
   const handleConfirmDelete = useCallback(async () => {
-    if (!deletingSprint) return;
+    if (!canEdit || !deletingSprint) return;
     const { teamId, sprint } = deletingSprint;
     setDeleteState('deleting');
     setDeleteError(null);
@@ -1621,10 +1674,11 @@ export default function DeliveryPlanningTab({ data }) {
       setDeleteError(String(e.message || e));
       setDeleteState('confirm');
     }
-  }, [deletingSprint]);
+  }, [deletingSprint, canEdit]);
 
   // Selected sprint IDs that no longer exist in Jira (reported by getDelivery).
   const handleRemoveMissing = useCallback((teamId, sprintId) => {
+    if (!canEdit) return;
     setSelection(prev => ({ ...prev, [teamId]: (prev[teamId] || []).filter(id => id !== sprintId) }));
     setOverrides(prev => {
       const key = `${teamId}:${sprintId}`;
@@ -1641,24 +1695,26 @@ export default function DeliveryPlanningTab({ data }) {
       return { ...prev, missingByTeam: missing };
     });
     setDirty(true); setSaved(false);
-  }, []);
+  }, [canEdit]);
 
   const handleRecreateMissing = useCallback((teamId, sprintId) => {
+    if (!canEdit) return;
     handleRemoveMissing(teamId, sprintId);
     setSprintError(null);
     setAddSprintTeam(teamId);
-  }, [handleRemoveMissing]);
+  }, [handleRemoveMissing, canEdit]);
 
   // Base capacity: save back to config
   const handleBaseCap = useCallback((teamId, pts) => {
+    if (!canEdit) return;
     setLocalTeams(prev => prev.map(t => t.id === teamId ? { ...t, sprintCap: pts } : t));
     const fullConfig = { ...config, teams: localTeams.map(t => t.id === teamId ? { ...t, sprintCap: pts } : t) };
     invoke('saveConfig', fullConfig).catch(console.error);
     setDirty(true); setSaved(false);
-  }, [config, localTeams]);
+  }, [config, localTeams, canEdit]);
 
   const handleSave = async () => {
-    if (!versionId) return;
+    if (!canEdit || !versionId) return;
     setSaving(true);
     try {
       await withSaving(() => invoke('saveDelivery', { versionId, selection, overrides }));
@@ -1671,16 +1727,19 @@ export default function DeliveryPlanningTab({ data }) {
   // localIdeas is the FULL app-wide list so reordering/team changes stay consistent
   // with the Release Planning board) ──────────────────────────────────────────
   const handleIdeaTeamChange = useCallback((issueKey, teamId) => {
+    if (!canEdit) return;
     setLocalIdeas(prev => prev.map(i => i.key === issueKey ? { ...i, team: teamId } : i));
     withSaving(() => invoke('updateIdeaTeam', { issueKey, teamId })).catch(console.error);
-  }, []);
+  }, [canEdit]);
 
   const handleIdeaRiceChange = useCallback((issueKey, vals) => {
+    if (!canEdit) return;
     setLocalIdeas(prev => prev.map(i => i.key === issueKey ? { ...i, ...vals } : i));
     withSaving(() => invoke('updateIdeaRice', { issueKey, ...vals })).catch(console.error);
-  }, []);
+  }, [canEdit]);
 
   const handleIdeaReorder = useCallback((dragKey, dropKey) => {
+    if (!canEdit) return;
     setLocalIdeas(prev => {
       const next = [...prev];
       const from = next.findIndex(i => i.key === dragKey);
@@ -1691,13 +1750,12 @@ export default function DeliveryPlanningTab({ data }) {
       withSaving(() => invoke('updateIdeaOrder', { order: next.map(i => i.key) })).catch(console.error);
       return next;
     });
-  }, []);
+  }, [canEdit]);
 
   const loadConversion = useCallback(() => {
     setConvertLoading(true);
     invoke('getConversion').then(d => {
       setConversion(d.conversion || {});
-      setEpicProjectByIdea(d.epicProjectByIdea || {});
     }).catch(console.error).finally(() => setConvertLoading(false));
   }, []);
 
@@ -1726,10 +1784,11 @@ export default function DeliveryPlanningTab({ data }) {
   // Waterline execution table's "Mark idea Done" — reuses the same status-transition
   // resolver as Intake/Release Planning, keyed by the app's own lifecycle map.
   const handleMarkIdeaDone = useCallback((ideaKey) => {
+    if (!canEdit) return;
     const doneStatus = config.jiraCfg?.statusMap?.Done ?? 'Done';
     setLocalIdeas(prev => prev.map(i => i.key === ideaKey ? { ...i, status: doneStatus } : i));
     withSaving(() => invoke('transitionIdea', { issueKey: ideaKey, targetStatus: 'Done' })).catch(console.error);
-  }, [config.jiraCfg]);
+  }, [config.jiraCfg, canEdit]);
 
   const sprintsByTeam = deliveryData?.sprintsByTeam || {};
 
@@ -1765,6 +1824,28 @@ export default function DeliveryPlanningTab({ data }) {
   });
 
   const selectedVersion = versions.find(v => v.id === versionId);
+  const releaseDate = selectedVersion?.releaseDate || null;
+  const hasDateConflict = !!(releaseDate && Object.entries(selection).some(([teamId, sprintIds]) =>
+    (sprintIds || []).some(sid => {
+      const sp = (sprintsByTeam[teamId] || []).find(s => s.id === sid);
+      return sp?.endDate && new Date(sp.endDate) > new Date(releaseDate);
+    })
+  ));
+
+  const handleSaveDate = async (newDate) => {
+    if (!canEdit || !selectedVersion) return;
+    setDateSaving(true); setDateError(null);
+    try {
+      const res = await withSaving(() => invoke('updateVersionReleaseDate', { versionId: selectedVersion.id, releaseDate: newDate }));
+      if (!res.ok) { setDateError(res.error || 'Failed to save'); return; }
+      setShowDateDialog(false);
+      onRefresh?.();
+    } catch (e) {
+      setDateError(String(e.message || e));
+    } finally {
+      setDateSaving(false);
+    }
+  };
 
   return (
     <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 0 64px' }}>
@@ -1778,6 +1859,14 @@ export default function DeliveryPlanningTab({ data }) {
             {versions.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
           </select>
         </div>
+        {selectedVersion && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <label style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--text-subtlest)' }}>Target release date</label>
+            <span style={{ fontSize: 14, color: releaseDate ? 'var(--text)' : 'var(--text-subtlest)', padding: '7px 0' }}>
+              {releaseDate ? fmtDate(releaseDate) : 'Not set'}
+            </span>
+          </div>
+        )}
         <div style={{ flex: 1 }} />
         {dirty && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, background: 'var(--filling-bg)', border: '1px solid var(--filling-border)', borderRadius: 6, padding: '10px 12px 10px 14px' }}>
@@ -1802,6 +1891,21 @@ export default function DeliveryPlanningTab({ data }) {
         </div>
       ) : (
         <>
+          {hasDateConflict && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--over-bg)', border: '1px solid var(--over-border)', borderRadius: 6, padding: '10px 12px', marginBottom: 16 }}>
+              <span style={{ fontSize: 15 }}>⚠</span>
+              <span style={{ fontSize: 13, color: 'var(--over-text)', flex: 1 }}>
+                The target release date is later than the final sprint end date, please remove the sprints or change the target release date
+              </span>
+              {canEdit && (
+                <button onClick={() => setShowDateDialog(true)}
+                  style={{ background: 'transparent', border: '1px solid var(--over-border)', borderRadius: 4, padding: '5px 12px', fontSize: 13, fontWeight: 600, color: 'var(--over-text)', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                  Change target date
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Stepper */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '10px 16px', marginBottom: 16 }}>
             {STAGES.map((st, i) => {
@@ -1868,9 +1972,10 @@ export default function DeliveryPlanningTab({ data }) {
               sprintsByTeam={sprintsByTeam}
               selection={selection}
               overrides={overrides}
+              threshold={release.threshold ?? config.threshold ?? 70}
               conversion={conversion}
-              epicProjectByIdea={epicProjectByIdea}
               loading={convertLoading}
+              canEdit={canEdit}
               onTeamChange={handleIdeaTeamChange}
               onRiceChange={handleIdeaRiceChange}
               onSizeChange={handleIdeaSizeChange}
@@ -1891,6 +1996,7 @@ export default function DeliveryPlanningTab({ data }) {
               ideas={localIdeas}
               conversion={conversion}
               statusMap={config.jiraCfg?.statusMap}
+              canEdit={canEdit}
               onMarkIdeaDone={handleMarkIdeaDone}
             />
           ) : (
@@ -1902,6 +2008,17 @@ export default function DeliveryPlanningTab({ data }) {
             />
           )}
         </>
+      )}
+
+      {/* Change target release date dialog */}
+      {showDateDialog && selectedVersion && (
+        <ReleaseDateDialog
+          version={selectedVersion}
+          saving={dateSaving}
+          error={dateError}
+          onSave={handleSaveDate}
+          onCancel={() => { setShowDateDialog(false); setDateError(null); }}
+        />
       )}
 
       {/* Add sprint dialog */}

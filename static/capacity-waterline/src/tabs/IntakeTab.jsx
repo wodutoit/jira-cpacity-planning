@@ -45,8 +45,8 @@ function DotRating({ value, max = 5, onChange, color }) {
           <button key={n} type="button" onClick={() => onChange(n === value ? 0 : n)}
             style={{
               width: 13, height: 13, borderRadius: '50%', border: 'none', cursor: 'pointer', padding: 0,
-              background: filled ? color : 'var(--ds-background-neutral, #F4F5F7)',
-              boxShadow: filled ? 'none' : 'inset 0 0 0 1.5px #DFE1E6',
+              background: filled ? color : 'var(--surface-sunken)',
+              boxShadow: filled ? 'none' : 'inset 0 0 0 1.5px var(--border)',
               transition: 'background .1s',
             }} title={String(n)} />
         );
@@ -80,7 +80,7 @@ function EditableTitle({ value, ideaKey, onChange }) {
   return (
     <span className="idea-title" title={`${value} — click to edit`}
       style={{ cursor: 'text', borderBottom: '1px dashed transparent' }}
-      onMouseEnter={e => e.currentTarget.style.borderBottomColor = '#DFE1E6'}
+      onMouseEnter={e => e.currentTarget.style.borderBottomColor = 'var(--border)'}
       onMouseLeave={e => e.currentTarget.style.borderBottomColor = 'transparent'}
       onClick={() => { setDraft(value); setEditing(true); }}>
       {value}
@@ -239,17 +239,17 @@ export default function IntakeTab({ data }) {
       {/* ── Header counts ── */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <div className="card" style={{ padding: '8px 16px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 18, fontWeight: 700, color: '#344563' }}>{newCount}</span>
-          <span style={{ fontSize: 12, color: '#6B778C' }}>New</span>
+          <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-subtle)' }}>{newCount}</span>
+          <span style={{ fontSize: 12, color: 'var(--text-subtlest)' }}>New</span>
         </div>
         <div className="card" style={{ padding: '8px 16px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: 18, fontWeight: 700, color: '#6D4BD8' }}>{backlogCount}</span>
-          <span style={{ fontSize: 12, color: '#6B778C' }}>Backlog</span>
+          <span style={{ fontSize: 12, color: 'var(--text-subtlest)' }}>Backlog</span>
         </div>
         {readyCount > 0 && (
-          <div style={{ padding: '5px 12px', background: '#E3FCEF', borderRadius: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 14, fontWeight: 700, color: '#006644' }}>{readyCount}</span>
-            <span style={{ fontSize: 12, color: '#006644' }}>scored & ready to promote</span>
+          <div style={{ padding: '5px 12px', background: 'var(--ok-bg)', borderRadius: 12, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--ok-text)' }}>{readyCount}</span>
+            <span style={{ fontSize: 12, color: 'var(--ok-text)' }}>scored & ready to promote</span>
           </div>
         )}
       </div>
@@ -280,7 +280,7 @@ export default function IntakeTab({ data }) {
             + Add idea
           </Button>
         </div>
-        {addError && <p style={{ color: '#DE350B', fontSize: 13, marginTop: 8 }}>{addError}</p>}
+        {addError && <p style={{ color: 'var(--over-text)', fontSize: 13, marginTop: 8 }}>{addError}</p>}
       </div>
 
       {/* ── Filter chips ── */}
@@ -290,7 +290,7 @@ export default function IntakeTab({ data }) {
         <FilterChips label="Status"  chips={statusChipOpts}  active={statusChips}  onChange={setStatusChips} />
       </div>
 
-      <div style={{ fontSize: 12, color: '#6B778C', marginBottom: 8 }}>
+      <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginBottom: 8 }}>
         {displayed.length} idea{displayed.length !== 1 ? 's' : ''}
       </div>
 
@@ -304,7 +304,7 @@ export default function IntakeTab({ data }) {
               <th style={{ width: 75 }}>Impact</th>
               <th style={{ width: 75 }}>Effort</th>
               <th style={{ width: 62 }}>Conf%</th>
-              <th style={{ width: 62, cursor: 'pointer', userSelect: 'none', color: '#0052CC' }}
+              <th style={{ width: 62, cursor: 'pointer', userSelect: 'none', color: 'var(--brand)' }}
                 onClick={() => setSortDir(d => d === -1 ? 1 : -1)}>
                 RICE {sortDir === -1 ? '↓' : '↑'}
               </th>
@@ -392,7 +392,7 @@ export default function IntakeTab({ data }) {
                       ))}
                     </select>
                     {!hasScore && currentLifecycle === 'New' && (
-                      <div style={{ fontSize: 10, color: '#97A0AF', marginTop: 2 }}>needs RICE to promote</div>
+                      <div style={{ fontSize: 10, color: 'var(--text-subtlest)', marginTop: 2 }}>needs RICE to promote</div>
                     )}
                   </td>
                   <td>

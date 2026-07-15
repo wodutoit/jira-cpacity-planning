@@ -63,6 +63,13 @@ export default function WaterlineChart({
   // Are there any over-capacity bars? (for "target" highlight)
   const hasOver = teamCols.some(c => c.cap && c.alloc / c.cap * 100 > 100);
 
+  // Smoothing candidates: teams at/under threshold, ranked by how much free capacity
+  // they have — used both for the dashed "target" border and the hover callout text.
+  const headrooms = teamCols
+    .filter(c => c.cap && c.alloc / c.cap * 100 <= threshold)
+    .map(c => ({ name: c.name, free: c.cap - c.alloc }))
+    .sort((a, b) => b.free - a.free);
+
   const threshY = threshold / SCALE_TOP * 100;  // % from bottom
   const capY    = 100 / SCALE_TOP * 100;         // ≈ 76.9%
 
@@ -118,6 +125,21 @@ export default function WaterlineChart({
             : isTarget ? '1.5px dashed var(--ok-border)'
             : '1px solid var(--border)';
 
+          // Smoothing hint: hovering an over-capacity bar suggests where to move work;
+          // hovering an under-capacity "target" bar (dashed border) explains why it's one.
+          const hovered = hoveredTeam === col.id;
+          let calloutText = null;
+          if (!col.isTotal && hovered) {
+            if (isOver) {
+              const tgt = headrooms[0];
+              calloutText = tgt
+                ? `Over by ${col.alloc - col.cap} pts — move work to ${tgt.name} (${tgt.free} free)`
+                : `Over by ${col.alloc - col.cap} pts — no team has headroom`;
+            } else if (isTarget) {
+              calloutText = `${col.cap - col.alloc} pts free — room to absorb work`;
+            }
+          }
+
           return (
             <div key={col.id}
               onClick={() => !col.isTotal && onTeamFilter?.(selected ? null : col.id)}
@@ -132,6 +154,18 @@ export default function WaterlineChart({
                 transition: 'background-color .15s',
                 ...(col.isTotal ? { borderLeft: '1px dashed var(--border)', paddingLeft: 20, marginLeft: 10 } : {}),
               }}>
+
+              {/* Smoothing hint callout */}
+              {calloutText && (
+                <div style={{
+                  position: 'absolute', bottom: '100%', left: '50%', transform: 'translateX(-50%)',
+                  marginBottom: 6, background: 'var(--text)', color: 'var(--surface)',
+                  fontSize: 11, fontWeight: 600, padding: '5px 9px', borderRadius: 4,
+                  whiteSpace: 'nowrap', zIndex: 20, boxShadow: 'var(--shadow-sm)', pointerEvents: 'none',
+                }}>
+                  {calloutText}
+                </div>
+              )}
 
               {/* Track */}
               <div style={{

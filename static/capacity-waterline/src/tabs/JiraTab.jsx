@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@forge/bridge';
+import { invoke, router } from '@forge/bridge';
 import Select from '@atlaskit/select';
 import Button from '../components/Button';
 import Spinner from '@atlaskit/spinner';
@@ -22,13 +22,17 @@ function fieldOpts(fields, types) {
 }
 function findOpt(opts, val) { return opts.find(o => o.value === val) ?? null; }
 
-export default function JiraTab({ data }) {
+export default function JiraTab({ data, onRefresh }) {
+  const { siteUrl = '' } = data ?? {};
   const [setup, setSetup] = useState(null);
   const [loadingSetup, setLoadingSetup] = useState(true);
   const [details, setDetails] = useState(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
+  const [releaseSpaceFields, setReleaseSpaceFields] = useState([]);
+  const [releaseSpaceFieldsFor, setReleaseSpaceFieldsFor] = useState(undefined);
+  const [loadingReleaseSpaceFields, setLoadingReleaseSpaceFields] = useState(false);
   const [form, setForm] = useState(() => ({
-    ideaSpace: '', projectType: '', releaseField: '', sizeField: '',
+    ideaSpace: '', projectType: '', releaseSpace: '', releaseSpaceField: 'fixVersions', releaseField: '', sizeField: '',
     reachField: '', impactField: '', effortField: '', confidenceField: '',
     statusMap: { ...DEFAULT_STATUS_MAP },
     ...(data?.config?.jiraCfg ?? {}),
@@ -68,6 +72,35 @@ export default function JiraTab({ data }) {
     setDirty(true); setValidation(null); setSavedOk(false);
   }, []);
 
+  // The release space field's options come from whichever project is actually in effect —
+  // the Release Space if one is set, otherwise the Idea Space itself (same fallback the
+  // backend uses). This is a different, non-Idea-scoped field list than ideaFields below.
+  const effectiveReleaseSpace = form.releaseSpace || form.ideaSpace;
+
+  useEffect(() => {
+    if (!effectiveReleaseSpace) { setReleaseSpaceFields([]); setReleaseSpaceFieldsFor(effectiveReleaseSpace); return; }
+    setLoadingReleaseSpaceFields(true);
+    invoke('getProjectFields', { projectKey: effectiveReleaseSpace })
+      .then(res => setReleaseSpaceFields(res?.fields ?? []))
+      .catch(() => setReleaseSpaceFields([]))
+      .finally(() => { setReleaseSpaceFieldsFor(effectiveReleaseSpace); setLoadingReleaseSpaceFields(false); });
+  }, [effectiveReleaseSpace]);
+
+  // If the field previously selected doesn't exist on the newly-effective project (e.g. the
+  // user switched Release Space), don't silently keep pointing at a stale field from the old
+  // project — re-default to fixVersions when available, otherwise clear it for re-selection.
+  // Gated on releaseSpaceFieldsFor matching effectiveReleaseSpace (not just a loading flag):
+  // on mount, this effect and the fetch-effect above both fire in the same pass, before the
+  // fetch's setLoadingReleaseSpaceFields(true) is applied — a loading-flag guard would see a
+  // stale "not loading" + empty fields list and wrongly clear a perfectly valid saved field.
+  useEffect(() => {
+    if (releaseSpaceFieldsFor !== effectiveReleaseSpace) return;
+    const keys = releaseSpaceFields.map(f => f.key);
+    if (form.releaseSpaceField && !keys.includes(form.releaseSpaceField)) {
+      set('releaseSpaceField', keys.includes('fixVersions') ? 'fixVersions' : '');
+    }
+  }, [releaseSpaceFields, releaseSpaceFieldsFor, effectiveReleaseSpace]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const validate = async () => {
     setValidating(true);
     try { setValidation(await invoke('validateJiraCfg', form)); }
@@ -76,8 +109,13 @@ export default function JiraTab({ data }) {
 
   const save = async () => {
     setSaving(true);
-    try { await invoke('saveJiraCfg', form); setSavedOk(true); setDirty(false); }
-    finally { setSaving(false); }
+    try {
+      await invoke('saveJiraCfg', form);
+      setSavedOk(true); setDirty(false);
+      // Reloads the app-level config so a later remount of this tab (e.g. switching tabs
+      // and back) re-initializes its form from the saved values, not the stale pre-save ones.
+      await onRefresh?.();
+    } finally { setSaving(false); }
   };
 
   if (loadingSetup) return <div className="center-msg"><Spinner size="medium" /> &nbsp; Loading…</div>;
@@ -87,10 +125,14 @@ export default function JiraTab({ data }) {
   const ideaFields = details?.ideaFields ?? [];
   const statuses = (details?.statuses ?? []).map(s => toOption(s));
   const projectOpts = (setup?.projects ?? []).map(p => toOption(p.key, `${p.name} (${p.key})`));
+  const nonJpdProjectOpts = (setup?.projects ?? [])
+    .filter(p => p.type !== 'product_discovery')
+    .map(p => toOption(p.key, `${p.name} (${p.key})`));
   const allFieldOpts = fieldOpts(setup?.allFields ?? []);
   const ideaFieldOpts = fieldOpts(ideaFields);
   const numericOpts = fieldOpts(ideaFields, ['number', 'float']);
   const releaseOpts = fieldOpts(ideaFields, ['option', 'array', 'string', 'any']);
+  const releaseSpaceFieldOpts = fieldOpts(releaseSpaceFields, ['array', 'option', 'string', 'any']);
 
   const canSave = validation?.valid === true;
 
@@ -137,23 +179,69 @@ export default function JiraTab({ data }) {
         <>
           <hr className="divider" />
 
-          {/* SECTION 2 — Release Field */}
+          {/* SECTION 2 — Release Space */}
           <div className="section">
-            <div className="section-heading">Release Field</div>
+            <div className="section-heading">Release Space</div>
+            <div className="instr instr-info">
+              Releases (with real target dates) are managed on a separate Jira Software or Business project — not on the Idea Space.
+              This matters most for <strong>Jira Product Discovery</strong> idea spaces, since JPD has no native Fix Versions;
+              its "release" field is just a plain select list with no dates behind it. Leave this unset to use the Idea Space itself
+              (fine for a Jira Software idea space that already has real versions).
+            </div>
+            <div className="two-col">
+              <div className="field-group">
+                <label className="field-label">Release space</label>
+                <Select
+                  options={nonJpdProjectOpts}
+                  value={findOpt(nonJpdProjectOpts, form.releaseSpace)}
+                  onChange={opt => set('releaseSpace', opt?.value ?? '')}
+                  placeholder="— Use the Idea Space —"
+                  isClearable
+                  isLoading={loadingSetup}
+                />
+                <div className="field-hint">The project whose Versions (name, target date, released) are the source of truth for releases.</div>
+              </div>
+              <div className="field-group">
+                <label className="field-label">Release space field <span style={{ color: 'var(--over-text)' }}>*</span></label>
+                <Select
+                  options={releaseSpaceFieldOpts}
+                  value={findOpt(releaseSpaceFieldOpts, form.releaseSpaceField)}
+                  onChange={opt => set('releaseSpaceField', opt?.value ?? '')}
+                  placeholder="Select field…"
+                  isLoading={loadingReleaseSpaceFields}
+                />
+                <div className="field-hint">Almost always <code>fixVersions</code> — Jira's native Fix Version(s) field.</div>
+              </div>
+            </div>
+            {form.releaseSpace && (
+              <button type="button" onClick={() => router.open(`${siteUrl}/projects/${form.releaseSpace}?selectedItem=com.atlassian.jira.jira-projects-plugin%3Arelease-page`)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--brand)', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', padding: 0, marginTop: 8 }}>
+                Manage versions in {form.releaseSpace} ↗
+              </button>
+            )}
+          </div>
+
+          <hr className="divider" />
+
+          {/* SECTION 3 — Idea release field */}
+          <div className="section">
+            <div className="section-heading">Idea Release Field</div>
             {isJPD ? (
               <div className="instr">
                 <strong>JPD projects don't have Fix Versions.</strong> Create a <strong>Select</strong> field called <code>Target Release</code>
-                on the Idea issue type in your JPD project settings, add your release names as options, then refresh and select it here.
+                on the Idea issue type in your JPD project settings, with an option matching the <strong>name</strong> of each release
+                you manage in the Release Space above, then refresh and select it here. The app writes/reads this field by release
+                <strong> name</strong>, since a JPD select option can't hold another project's version id.
               </div>
             ) : (
               <div className="instr">
-                Create a <strong>Select</strong> field called <code>Planned Version</code> on the Idea issue type
-                in your project settings, add your release names as options, then refresh and select it here.
-                Alternatively you can use <code>Fix versions</code> if already configured.
+                If this Idea Space already has real <code>Fix versions</code> configured (and is the same project as your Release
+                Space, or has no Release Space set), use that directly. Otherwise create a <strong>Select</strong> field called
+                <code> Planned Version</code> on the Idea issue type, matching release names from the Release Space above.
               </div>
             )}
             <div className="field-group">
-              <label className="field-label">Release field</label>
+              <label className="field-label">Idea release field</label>
               <Select
                 options={ideaFieldOpts}
                 value={findOpt(ideaFieldOpts, form.releaseField)}
@@ -161,7 +249,7 @@ export default function JiraTab({ data }) {
                 placeholder="Select field…"
                 isClearable
               />
-              <div className="field-hint">The field on Idea issues that identifies which release they belong to.</div>
+              <div className="field-hint">The field on Idea issues that stores which release they target.</div>
             </div>
           </div>
 
@@ -177,7 +265,7 @@ export default function JiraTab({ data }) {
               The app writes numeric values (XS=1, S=3, M=8, L=13, XL=21) and maps them to size labels.
             </div>
             <div className="field-group">
-              <label className="field-label">Size field <span style={{ color: '#DE350B' }}>*</span></label>
+              <label className="field-label">Size field <span style={{ color: 'var(--over-text)' }}>*</span></label>
               <Select
                 options={numericOpts.length ? numericOpts : ideaFieldOpts}
                 value={findOpt(ideaFieldOpts, form.sizeField)}

@@ -1,7 +1,7 @@
 {
   "name": "capacity-waterline",
   "version": "1.0.0",
-  "description": "Atlassian Forge resolver for Capacity Waterline",
+  "description": "Atlassian Forge resolver for Release Capacity Planning",
   "main": "src/index.js",
   "license": "ISC",
   "dependencies": {

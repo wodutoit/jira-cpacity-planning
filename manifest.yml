@@ -4,7 +4,14 @@ modules:
       resource: main
       resolver:
         function: resolver
-      title: Capacity Waterline
+      title: Release Capacity Planning
+      pages:
+        - title: Intake
+          route: intake
+        - title: Release Planning
+          route: release-planning
+        - title: Delivery Planning
+          route: delivery-planning
   function:
     - key: resolver
       handler: index.handler
@@ -29,6 +36,7 @@ permissions:
     - delete:sprint:jira-software
     - read:issue-details:jira
     - read:jql:jira
+    - manage:jira-project
     - storage:app
 
 app:

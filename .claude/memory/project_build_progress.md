@@ -1,6 +1,6 @@
 ---
 name: project-build-progress
-description: Build progress for Capacity Waterline Forge app — what's shipped, architecture decisions, field keys, resolvers, what's next
+description: Build progress for "Release Capacity Planning" Forge app (renamed from "Capacity Waterline") — what's shipped, architecture decisions, field keys, resolvers, what's next
 metadata:
   type: project
 ---
@@ -55,7 +55,15 @@ metadata:
 - **Sprint delete is guarded**: `deleteSprint` resolver checks issue count first (`GET .../sprint/{id}/issue`); only deletes if empty. If non-empty, refuses and returns a count so the frontend can point the user at the real board instead of silently moving issues to backlog.
 - **Date handling for Jira sprint dates**: Jira returns full ISO datetimes that can cross midnight in UTC vs local (e.g. `2026-07-28T14:00:00.000Z` = `2026-07-29` local in UTC+10). Never slice the raw ISO string for a date-only value — parse with `new Date(iso)` and read local `getFullYear()/getMonth()/getDate()`.
 - **App data is loaded once per session, not per tab**: `App.jsx` calls `getAll` on mount only; `TabShell` never refetches on tab switch, so every tab reads the same in-memory `data` snapshot until the header "Refresh" button (or `onRefresh` prop) is invoked. Any resolver that mutates shared config/teams data and expects OTHER tabs to see it immediately (e.g. Config's board mapping affecting Delivery Planning's Convert Ideas team list) must explicitly call the `onRefresh` prop (now threaded `App → TabShell → tab component`) after its save succeeds — ConfigTab's `save()` does this. If a future tab adds a save that other tabs depend on, wire `onRefresh` there too rather than assuming data is fresh.
+- **Theme: synced to Jira's own light/dark setting, no manual toggle.** `App.jsx` calls `view.theme.enable()` (from `@forge/bridge`) once on mount — this is a real, verified API (confirmed by reading the installed `@forge/bridge`/`@atlaskit/tokens` package source, not assumed from memory): it tells Forge to keep the iframe's `<html>` element's `data-color-mode` attribute (`"light"`/`"dark"`) in sync with the host Jira instance's theme, live, as the user changes it. `styles.css` defines the full token set under `:root` (light) and mirrors it under `html[data-color-mode="dark"]` — no JS state, no localStorage, no toggle button. User explicitly chose this over a manual toggle.
+- **Design tokens are exhaustively used now** — converted ~230 lines of `styles.css` and several component files (`App.jsx`, `TabShell.jsx`, `IntakeTab.jsx`, `JiraTab.jsx`) from hardcoded hex to `var(--*)` tokens so the dark palette actually takes effect app-wide. Two new token pairs were added: `--brand-hover`/`--brand-active` and `--over-hover`/`--over-active` (button hover/active states had no token before). Intentionally left as **literal hex, per the original design spec** (§12 of the handoff doc): RICE dot colors (`#E0A800`/`#6E93F5`/`#EE8C86`) and the "planned/linked" purple accent (`#6D4BD8`/`#7C5CEF`) — these are meant to be theme-agnostic accents, always the same in light/dark. Also left literal: all `color:'#fff'` paired with a `var(--brand)`/`var(--ok)`/`var(--over)`/`var(--threshold)` background (white-on-saturated-color text is fine in both themes).
+- **Known theming gap**: `JiraTab.jsx` uses real `@atlaskit/select` and `@atlaskit/spinner` components directly (the only two raw-Atlaskit usages in the app — everywhere else uses the custom `NativeSelect`/`Button` components specifically to avoid this). These Atlaskit components theme via `@atlaskit/tokens`' own `--ds-*` variable namespace, which requires importing the actual tokens CSS to populate — not done here, since it wasn't warranted for two widgets. They may not visually follow dark mode; not fixed this session, flagged for whoever touches the Jira Config tab next.
+- **Found dead CSS while converting to tokens** — `.wl-*`, `.rp-*`, `.idea-group-row`, `.idea-unassigned`, `.idea-key`, `.size-badge`, `.status-loz` classes in `styles.css` are defined but not applied by any component (superseded by inline-styled rewrites of `WaterlineChart`/`ReleasePlanningTab`/`IdeaTable`). Left as literal hex and not deleted — zero visual impact either way, but a future cleanup pass could remove them. Do NOT assume `className="idea-table"` / `.rice-pill` / `.filter-*` / `.chip` are similarly dead though — `IntakeTab.jsx` renders its RICE table directly with these classes, they're very much live (caught this the hard way — initially misclassified them as dead from an incomplete grep, had to backtrack and fix).
+- **Delivery Planning now enforces `editors`/`canEdit`** the same way `ReleasePlanningTab` always has (`!editors.length || editors.some(accountId match) || !admins.length || admins.some(...)`). It had NO write-access enforcement at all before this session — every mutating handler in the main component, plus `ConvertIdeasStage`'s convert/undo and `WaterlineStage`'s move-item action, now guard on `canEdit` (threaded down as a prop). Matches the existing app-wide pattern of guarding at the handler level rather than disabling every input — only the most prominent action buttons (Convert, Move ▾, Mark idea Done) are visually disabled/hidden for read-only users.
+- **Planning-mode smoothing suggestion** (`WaterlineChart.jsx`): ported from the prototype's `buildBar()` — an under-capacity ("target") bar gets a dashed border whenever any team is over capacity; hovering shows a tooltip ("Over by N pts — move work to {team} (N free)" on the over bar, "N pts free — room to absorb work" on a target bar). The `hoveredTeam` state already existed in this component from a previous pass but was unused/dead until this session wired up the callout.
+- **Release target-date vs. sprint-conflict**: confirmed via prototype research that this is a Delivery-only concept (not a separate Planning-mode panel — the handoff doc's phrasing conflated the two). The per-sprint-column "⚠ ends after release" warning was already built; added the missing summary banner in `WaterlineStage` with the prototype's exact copy: "The target release date is later than the final sprint end date, please remove the sprints or change the target release date." Required adding `releaseDate: v.releaseDate` to `fetchVersions()`'s mapped output (done in a prior session).
 - **Convert Ideas resolves the team's Jira project live from `boardId`** (`GET /rest/agile/1.0/board/{boardId}`) rather than trusting a cached `team.projectKey`, since that cache can be stale/absent for teams configured before board-mapping existed. Display labels in the Team column should key off `team.boardId` (is a board linked at all) not `team.projectKey` (a display nicety that can lag) — conflating the two previously caused "no board linked" to show even when a board genuinely was linked.
+- **Release space is decoupled from idea space; releases are reconciled by NAME, not id.** JPD idea spaces don't have real Fix Versions — their "release" field is a plain select list with no dates. `jiraCfg.releaseSpace` (a separate non-JPD project) is now the source of truth for real Jira Versions (`fetchVersions` reads `releaseSpace || ideaSpace`). Since a JPD select-field option can't hold another project's version id, `extractRelease` (in `fetchIdeas`) resolves the idea-side field's raw value to a real version id by matching **name** against the release space's version list (falls back to the raw id/name if unmatched, so ideas don't just disappear on a misconfigured setup); `updateIdeaRelease`/`createIdea` do the reverse via a new `resolveVersionName(versionId)` helper (`GET /rest/api/3/version/{id}`), writing `{value: name}` for any field that isn't `fixVersions`. Frontend code never needs to know about this — `idea.release` is always a real version id matching `versions[].id`, same contract as before. `getAll` now fetches versions BEFORE ideas (was previously parallel) since `fetchIdeas` needs the version list for the name lookup.
 
 ### Design tokens
 - CSS variables in styles.css matching prototype exactly:
@@ -89,9 +97,11 @@ metadata:
 
 ### Jira Config tab ✅ (admin only)
 - Project picker (detects JPD vs software)
-- Release, size, RICE field pickers with type-specific instructions
+- Size, RICE field pickers with type-specific instructions
 - Status mapping (lifecycle → Jira status names)
 - Validate → Save (validateJiraCfg resolver)
+- **Release Space** (new): a separate non-JPD project (`jiraCfg.releaseSpace`, dropdown filtered to `type !== 'product_discovery'`) that holds the REAL Jira Versions (name/date/released) — decoupled from the Idea Space, because JPD idea spaces don't have real Fix Versions; their "release" field is just a plain select list with no dates behind it. `jiraCfg.releaseSpaceField` (free-text input, defaults `'fixVersions'`) is stored but not yet used for anything other than documentation — `fetchVersions` always hits the dedicated `/project/{key}/versions` endpoint regardless of its value (kept simple; almost every project uses native fixVersions anyway). Falls back to `ideaSpace` if unset (simple non-JPD setups where the idea space itself has real versions — matches pre-existing behavior). Has a "Manage versions in {key} ↗" link (`router.open`) when set.
+- **Idea Release Field** (renamed from "Release Field", same underlying `jiraCfg.releaseField` key, unchanged storage shape): the field ON THE IDEA that stores its target release. For JPD idea spaces this is a plain select field with no relationship to the Release Space's real version ids — reconciled by NAME, see architecture decisions below.
 
 ### Release Planning tab ✅
 - View tabs [By team | By version] at very top (above version picker)
@@ -106,9 +116,16 @@ metadata:
   - RICE popover on pill click (4 dots + confidence + live score)
   - Status select colored by state; transitions via transitionIdea
   - Unassigned group with HR divider
+  - **By-team also shows**: Target release date (from the real Jira Version, `selectedVersion.releaseDate`) next to the version picker, and a "Manage releases ↗" link to `{siteUrl}/jira/software/projects/{releaseSpace||ideaSpace}/versions`
 - **By version:** VersionChart (stacked segments per team, colored by state)
   - Future versions 1-5 selector, CURRENT/FUTURE labels, Σ capacity line
   - Click version → filter idea table; version filter banner with ✕ Clear
+  - Each version bar's label stack: CURRENT/FUTURE chip → version name → **target release date** (new, small subtle text) → pts/cap
+
+### Delivery Planning tab — top-level layout (applies across all stages)
+- Version picker row also shows **Target release date** (from the real Jira Version) next to the picker.
+- **Conflict banner is hoisted above the stepper** (not stage-specific) — shows on every stage when any selected sprint (any team) ends after the release's target date: "The target release date is later than the final sprint end date, please remove the sprints or change the target release date", with a "Change target date" button (only if `canEdit`). Previously this only rendered inside the Waterline stage; moved per explicit request so it's visible everywhere. The Waterline grid's own per-sprint-column "⚠ ends after release" warnings still exist separately (more granular, stayed put).
+- **Change target date dialog** (`ReleaseDateDialog`): date input, calls new `updateVersionReleaseDate` resolver (writes the real Jira Version's `releaseDate` — affects everyone, not just this app), then calls `onRefresh()` (the same prop TabShell already threads to every tab) to reload `versions` app-wide rather than patching local state.
 
 ### Delivery Planning tab — Stage 1 "Sprints & Capacity" ✅ fully built
 - Single-column layout (matches stepper bar width): Release coverage → Base capacity → Sprint selection
@@ -148,6 +165,7 @@ metadata:
 
 ### New resolvers this session
 - `getWaterline({ versionId })`, `moveWaterlineItem({ issueKey, toTeamId, toSprintId })` — see above.
+- `updateVersionReleaseDate({ versionId, releaseDate })` — `PUT /rest/api/3/version/{id}`, writes the real Jira Version's release date. Needs the `manage:jira-project` scope (added; requires `forge install --upgrade` on the target site before it takes effect, same as every prior scope addition).
 
 ### Global features ✅
 - Global "Saving…" spinner in header (window cpw-saving events)
@@ -169,13 +187,16 @@ getConversion, convertIdea, undoConvert, getWaterline (live per-sprint-issue fet
 ## Manifest scopes (permissions.scopes)
 read:jira-work, read:jira-user, write:jira-work, read:issue:jira, read:project:jira, read:issue-type:jira,
 read:field:jira, write:issue:jira, read:board-scope:jira-software, read:sprint:jira-software,
-write:sprint:jira-software, delete:sprint:jira-software, read:issue-details:jira, read:jql:jira, storage:app
+write:sprint:jira-software, delete:sprint:jira-software, read:issue-details:jira, read:jql:jira,
+manage:jira-project, storage:app
 - delete:sprint:jira-software / read:issue-details:jira / read:jql:jira added for sprint-issue-count check + delete
+- manage:jira-project added for updateVersionReleaseDate (`PUT /rest/api/3/version/{id}`) — flagged by `forge lint`, not guessed
 - **New scopes require `forge install --upgrade` on the target site** (interactive-only command) before they take effect
 - `forge lint` did not flag any new scope requirement for the Bulk Issue Move API call (`/rest/api/3/bulk/issues/move`) added for Waterline's cross-team move — likely because the linter's static endpoint→scope map doesn't recognize this newer API, not necessarily because no additional scope is needed. If cross-team move fails at runtime with a permission-style error, check whether a newer/broader scope (beyond `write:issue:jira`) is required and add it.
 
 ## What's next
-- Delivery Planning Stages 1-4 are all built. Next candidates: live-instance testing of Stage 3's cross-team move (see Known limitations), or a new feature area entirely — nothing is queued unless the user asks.
+- Delivery Planning Stages 1-4 are all built. Of the 4 spec-vs-build gaps identified in a prior session (planning-mode smoothing suggestion, Delivery editors-gating, theme, release target-date banner), 3 are now done; the remaining one is **bulk-create-future-sprints**, which the requirements doc itself marks optional (D2: "Optionally bulk-create future sprints") — not implemented, not asked for explicitly, worth checking with the user before spending effort on it.
+- Also queued: live-instance testing of Stage 3's cross-team move (see Known limitations), or a new feature area entirely — nothing else is queued unless the user asks.
 
 ### Known limitations / gaps
 - Teams API dead: no Jira sync for team identity, Config-only
@@ -183,5 +204,7 @@ write:sprint:jira-software, delete:sprint:jira-software, read:issue-details:jira
 - RICE popover: only in Release Planning (not in Intake dots → they write directly)
 - By version mode: idea table works but shows all versions' ideas when no filter selected
 - Delivery board link (delete dialog) assumes `/jira/software/projects/{key}/boards/{id}` URL pattern — not verified across all Jira Cloud tiers
+- Dark theme is unverified against a real Jira dark-mode session (couldn't test live from here) — the token *values* for the dark palette are reasonable approximations, not extracted pixel-for-pixel from the prototype's own dark theme (couldn't get exact hex without disproportionate research cost). Sanity-check contrast/legibility in an actual dark-mode Jira instance.
+- `JiraTab.jsx`'s raw `@atlaskit/select`/`@atlaskit/spinner` usage may not follow dark mode (see architecture decisions above).
 - **Waterline's cross-team move (Bulk Issue Move API) is unverified against a live Jira instance** — this session couldn't test it end-to-end; the exact request/response contract for `/rest/api/3/bulk/issues/move` was implemented from training knowledge, not confirmed live. Test with a real cross-project move before relying on it. Likely failure modes: target project missing required fields Jira can't infer, the async task not completing within the 3s poll window (falls back to `status: 'pending'`, not a failure but not confirmed-complete either), or the API being gated behind a scope/plan not currently granted.
 - Moving a single child story cross-team (not its parent epic) may silently drop the parent-epic link, since team-managed epic↔story links require both issues in the same project — not currently detected or warned about.

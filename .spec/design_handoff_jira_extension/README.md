@@ -74,7 +74,7 @@ Everything the app computes (RICE score, allocation, waterline states) is **deri
 `{ id, name (Jira), sprintWeeks, sprintCap, sprintsPerRelease }` + **space** mapping. `sprintWeeks/sprintCap/sprintsPerRelease` are **extension‑owned**.
 
 ### 4.3 Version / Release
-`{ id (name), targetDate, status: Released|Active|Pending }`. The set of releases is derived from the Idea Space's release field; target date & status are extension metadata.
+`{ id (name), targetDate, status: Released|Active|Pending }`. The set of releases is derived from the Idea Space's release field; name, target date, and released/archived status are read **live from the Jira Version object** (`releaseDate`, `released`, `archived`) — not duplicated into an app-owned table. The app only stores its own planning metadata against the version id (threshold, team assignments, sprint selection, etc.).
 
 ### 4.4 Sprint (from the team's space/board)
 `{ id, name, goal, start, end, state: closed|active|future }`. Per team. Selection of which sprints belong to a release is per release+team (extension). Per‑sprint capacity **overrides** carry an optional note.
@@ -88,7 +88,7 @@ Everything the app computes (RICE score, allocation, waterline states) is **deri
 
 This screen is the contract between the app and Jira. Sections:
 
-1. **Idea Space** — select the Jira space where ideas live; **Releases field name** (the field on that space that supplies the release list; default "Fix Version/s"). Intake and Release Planning (planning mode) read ideas from here.
+1. **Idea Space** — select the Jira space where ideas live; **Releases field name** (the field on that space that supplies the release list; default "Fix Version/s"). Intake and Release Planning read ideas from here.
 2. **Idea field mapping** — map each idea attribute to a Jira field: Summary/Title, T‑shirt size, Team, Target release, Status, Reach, Impact, Effort, Confidence, RICE score.
 3. **Idea status mapping** — map lifecycle statuses to Jira status names (defaults: New→"New", Backlog→"Backlog", ToDo→"Selected for Development", Doing→"In Progress", Done→"Done").
 4. **Teams** — names synced from Jira; per team, choose the **Space** (holds its epics/stories/bugs/tasks **and sprints**) and enter the extension fields (Sprint weeks/cap/per‑release).
@@ -109,15 +109,15 @@ New  →  Backlog  →  ToDo  →  Doing  →  Done
 |---|---|---|
 | **New** | Captured, being evaluated in Intake | default on create |
 | **Backlog** | Scored & accepted into the prioritised pipeline | **manual** in Intake (New→Backlog) — allowed only once a RICE score exists |
-| **ToDo** | Slotted to a team for a release | **auto**: a scored Backlog idea gets a team |
+| **ToDo** | Slotted to a team for a release | not automated by the app — team assignment alone does not change status; set manually in Jira if this state is needed |
 | **Doing** | Converted to a Jira epic | **auto**: on convert‑to‑epic in Delivery |
 | **Done** | Delivered | **manual/derived**: when the linked epic is Done, the "Mark idea Done" button on the waterline sets it |
 
-Reverse: clearing a **ToDo** idea's team returns it to **Backlog**.
+Team assignment and team removal are **not** wired to status changes — this was in the original design reference but was deliberately dropped from the build.
 
 **Visibility gates (must implement):**
 - **Intake** shows only ideas with status **New** or **Backlog**.
-- **Release Planning** (planning mode idea board) shows only ideas that have a RICE score **and** status ≠ New (i.e. Backlog/ToDo/Doing/Done). New/unscored ideas never appear there.
+- **Release Planning**'s idea board shows only ideas that have a RICE score **and** status ≠ New (i.e. Backlog/ToDo/Doing/Done). New/unscored ideas never appear there.
 
 ---
 
@@ -145,27 +145,30 @@ Reverse: clearing a **ToDo** idea's team returns it to **Backlog**.
 
 ## 9. Screens / views
 
-Tabs (in order): **Intake · Release Planning · Config · Jira · (Sample Data — prototype only)**. (The prototype also has an "Edge states" gallery — a design catalogue of loading/empty/error states to reproduce, not a user screen.)
+Tabs (in order): **Intake · Release Planning · Delivery Planning · Config · Jira · (Sample Data — prototype only)**. (The prototype also has an "Edge states" gallery — a design catalogue of loading/empty/error states to reproduce, not a user screen.)
+
+Note: the original design reference combines Release Planning and Delivery into one screen behind a Planning/Delivery mode toggle. The build instead splits these into two separate top-level tabs — **Release Planning** and **Delivery Planning** — since that maps more naturally onto Jira's own tab-based navigation. This is an intentional deviation from the reference, not a gap.
 
 ### 9.1 Intake
 Capture + RICE‑prioritise New/Backlog ideas. Layout: header with New/Backlog/ready counts → add‑idea form (summary, size, target release) → **Version** and **Team** multi‑select filter chip rows (each with All + Untagged/Unassigned) → RICE table.
 **Table columns:** Summary (editable), Reach/Impact/Effort (clickable 5‑dot ratings), Conf. (0–100 number), **RICE** (sortable header ↓/↑; per‑row score pill), Team (select), Target release (select incl. "Unassigned"), Status (New/Backlog — **disabled until a RICE score exists**, with a "needs RICE to promote" hint), delete. Backlog rows are tinted; New rows plain. Rows sort by RICE (default desc).
 
 ### 9.2 Release Planning
-Has a **mode toggle**: **Planning** and **Delivery**. (Prototype opens in Delivery.)
+Built as its own top-level tab covering the reference's "Planning mode" content (see the note under §9 above on why this is split from Delivery).
 
-**Planning mode — idea board:** the capacity waterline chart (per team, or a by‑version roadmap view) + an idea table grouped by team (plus an Unassigned group), each row: rank (drag to reorder / across teams), title, RICE pill (opens editor), size, team, version, status (Backlog/ToDo/Doing/Done). Assigning a team auto‑advances a Backlog idea to ToDo. A version target‑date panel flags date/sprint conflicts.
+**Idea board:** the capacity waterline chart (per team, or a by‑version roadmap view) + an idea table grouped by team (plus an Unassigned group), each row: rank (drag to reorder / across teams), title, RICE pill (opens editor), size, team, version, status (Backlog/ToDo/Doing/Done). A version target‑date panel flags date/sprint conflicts.
 
-**Delivery mode** has four stages:
+### 9.3 Delivery Planning
+Built as its own top-level tab covering the reference's "Delivery mode" content — a stepper-driven flow with four stages:
 1. **Sprints & capacity** — pick which sprints (from each team's mapped space) belong to this release; shows release coverage (available vs planned), base capacity per team, and a per‑sprint capacity grid with overrides (+ reason, e.g. leave). Creating/editing a sprint happens on the team's space.
 2. **Convert ideas** — the release's team‑assigned ideas become Jira epics (+ stories per selected sprint); converting sets the idea to **Doing**. Handles epics that were moved to another team's project in Jira (mismatch warning + "move" action).
 3. **Waterline** — the resulting Jira items grouped by team; the **Linked idea** column shows the originating idea, and when an epic is **Done** but its idea isn't, a **"✓ Mark idea Done"** button sets the idea to Done.
 4. **Reconcile** — planned (config) vs actual (converted) points per team.
 
-### 9.3 Config
-App‑owned settings: Versions (name/date/status), Teams (name + sprint weeks/cap/per‑release + derived release cap), Access control (editors), Planning defaults (threshold, warn statuses), **T‑shirt scale**. Save with dirty/saved state.
+### 9.4 Config
+App‑owned settings: Teams (name + sprint weeks/cap/per‑release + derived release cap + Jira board mapping), Access control (editors), Planning defaults (threshold, warn statuses), **T‑shirt scale**. Save with dirty/saved state. Releases/versions are **not** an app-owned table here — they're read live from the Idea Space's release field, with name/date/status coming directly from the Jira Version object (see §4.3). This is a deliberate improvement over the original design reference: one less place for release data to drift out of sync with Jira.
 
-### 9.4 Jira
+### 9.5 Jira
 The integration mapping + validation described in §5.
 
 ---
@@ -175,7 +178,7 @@ The integration mapping + validation described in §5.
 - **RICE dots**: click dot *k* sets the value to *k*; changing any RICE input recomputes the score live.
 - **Filters/sort** (Intake): multi‑select chips (empty/All = show all); RICE header toggles sort direction.
 - **Drag & drop** (planning board): reorder ideas within a team and drag across teams (converted epics are locked to their team); drop onto a team group header to move to the bottom.
-- **Auto‑transitions**: team assigned → ToDo; team cleared → Backlog; convert → Doing; epic Done → offer Done.
+- **Auto‑transitions**: convert → Doing; epic Done → offer Done. (The reference's team‑assigned→ToDo / team‑cleared→Backlog auto‑transitions were deliberately not built — team assignment never changes idea status.)
 - **Guards**: New→Backlog only with a score; unselecting a sprint that has allocation prompts confirmation; release target date later than last sprint end flags a conflict.
 - **Validation gate** (Jira): Save disabled until Validate passes; edits re‑arm it.
 - **Theme**: light/dark toggle.
@@ -185,7 +188,7 @@ The integration mapping + validation described in §5.
 
 Persist (extension storage): mappings (`jiraCfg`), teams' extension fields + team→space, versions + dates/status, T‑shirt `scale`, threshold/defaults, editors, per‑release & per‑sprint capacity overrides (+notes), sprint selection per release/team, idea ordering/priority.
 Read from Jira: ideas (Idea Space), teams, sprints (team spaces), issues/epics (team spaces), release field values.
-UI‑only/derived: active tab, planning vs delivery mode, delivery stage, current version, filters, sort, drag state, dialogs/popovers, validation result, RICE scores, allocations, waterline states, dirty/saved flags.
+UI‑only/derived: active tab, delivery stage, current version, filters, sort, drag state, dialogs/popovers, validation result, RICE scores, allocations, waterline states, dirty/saved flags.
 
 ## 12. Design tokens
 
@@ -207,7 +210,7 @@ You'll need scopes to: read projects/issues/fields/statuses; read Jira Teams; re
 ## 14. Build guidance
 
 - Start from the **data contract** (§4–5): implement the Jira settings + validation first so real data can flow.
-- Then **Intake** (§9.1) and the **lifecycle/gates** (§6), then the **planning board + capacity math** (§8, §9.2 planning), then **delivery** (§9.2 delivery) which depends on team→space + sprints.
+- Then **Intake** (§9.1) and the **lifecycle/gates** (§6), then the **planning board + capacity math** (§8, §9.2), then **Delivery Planning** (§9.3) which depends on team→space + sprints.
 - Keep RICE, allocation and waterline state **derived**.
 - Reproduce the light/dark theming and the status‑lozenge palette for visual parity with Jira.
 

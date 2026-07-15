@@ -30,9 +30,19 @@ const JIRA_FIELDS = [
 // {
 //   ideaSpace: string,           // project key (e.g. "DISC" or "KAN")
 //   projectType: string,         // "product_discovery" | "software"
-//   releaseField: string,        // field key for release tagging
-//                                //   software default: "fixVersions"
-//                                //   JPD default: "customfield_10055" (Roadmap) or user-created "Target Release"
+//   releaseSpace: string,        // project key of the space with REAL Jira Versions
+//                                //   (dates, released/archived) — must be non-JPD.
+//                                //   Falls back to ideaSpace if unset (simple same-project setups).
+//   releaseSpaceField: string,   // almost always "fixVersions" — kept editable for rare
+//                                //   projects that track releases some other way.
+//   releaseField: string,        // field key on the IDEA that stores its target release.
+//                                //   software default: "fixVersions" (works directly when
+//                                //   ideaSpace === releaseSpace). Otherwise written/read by
+//                                //   NAME, since the version id belongs to the release
+//                                //   space's project, not the idea's own — this applies
+//                                //   both to a JPD "Target Release" select field AND to a
+//                                //   real Version Picker custom field on a software idea
+//                                //   space (see extractRelease/getFieldSchema/resolveVersionName).
 //   sizeField: string | null,    // field key for T-shirt size (user-added number field)
 //   statusMap: object,           // { New, Backlog, ToDo, Doing, Done } → Jira status names
 //   reachField: string,          // default: customfield_10056 (JPD native) or user-added
@@ -41,19 +51,30 @@ const JIRA_FIELDS = [
 //   confidenceField: string,     // default: customfield_10066
 // }
 
-function extractRelease(fields, releaseField) {
+// Resolve a raw idea-side release-field value to a REAL Jira Version id from the
+// configured release space. Same-project fixVersions already carries a real version
+// id directly. Everywhere else (a JPD "Target Release" select field, or any idea-side
+// field that isn't fixVersions on the release space's own project) only carries a
+// label/name — those are matched by NAME against the release space's version list so
+// the rest of the app can keep treating `idea.release` as a real version id uniformly.
+function extractRelease(fields, releaseField, versionsByName, versionIds) {
   if (!releaseField) return null;
   const val = fields[releaseField];
   if (!val) return null;
-  // fixVersions → array of {id, name}
-  if (Array.isArray(val)) return val[0]?.id ?? null;
-  // option field (Roadmap, Target Release) → {id, value}
-  if (typeof val === 'object') return val.id ?? val.value ?? null;
-  return String(val);
+  let rawId = null, rawName = null;
+  if (Array.isArray(val)) { rawId = val[0]?.id ?? null; rawName = val[0]?.name ?? null; }
+  else if (typeof val === 'object') { rawId = val.id ?? null; rawName = val.value ?? val.name ?? null; }
+  else { rawName = String(val); }
+
+  if (rawId && versionIds?.has(rawId)) return rawId;
+  if (rawName && versionsByName?.has(rawName)) return versionsByName.get(rawName);
+  return rawId ?? rawName ?? null;
 }
 
-async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}, ideaOrder = []) {
+async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}, ideaOrder = [], versions = []) {
   if (!jiraCfg?.ideaSpace) return [];
+  const versionsByName = new Map(versions.map(v => [v.name, v.id]));
+  const versionIds = new Set(versions.map(v => v.id));
 
   const { sizeField, releaseField, reachField, impactField, effortField, confidenceField } = jiraCfg;
   const extraFields = [sizeField, releaseField, reachField, impactField, effortField, confidenceField]
@@ -90,7 +111,7 @@ async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}, ideaOrder = [
     team: ideaTeams[i.key] ?? (i.fields.customfield_10001?.id ?? null),
     teamName: ideaTeams[i.key] ? null : (i.fields.customfield_10001?.name ?? null),
     size: ideaSizes[i.key] !== undefined ? ideaSizes[i.key] : (sizeField ? (i.fields[sizeField] ?? null) : null),
-    release: extractRelease(i.fields, releaseField),
+    release: extractRelease(i.fields, releaseField, versionsByName, versionIds),
     reach: i.fields[reachField ?? 'customfield_10056'] ?? null,
     impact: i.fields[impactField ?? 'customfield_10053'] ?? null,
     effort: i.fields[effortField ?? 'customfield_10064'] ?? null,
@@ -101,15 +122,49 @@ async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}, ideaOrder = [
   return mapped.sort((a, b) => a._rank - b._rank);
 }
 
+// Releases/versions come from the configured "release space" — a real project with
+// native Jira Versions (dates, released/archived state). Falls back to the idea space
+// itself for setups where that project already IS a suitable non-JPD release tracker.
 async function fetchVersions(jiraCfg) {
-  if (!jiraCfg?.ideaSpace) return [];
+  const projectKey = jiraCfg?.releaseSpace || jiraCfg?.ideaSpace;
+  if (!projectKey) return [];
   const res = await asUser().requestJira(
-    route`/rest/api/3/project/${jiraCfg.ideaSpace}/versions`,
+    route`/rest/api/3/project/${projectKey}/versions`,
     { headers: { Accept: 'application/json' } }
   );
   if (!res.ok) return [];
   const body = await res.json();
   return (body || []).map(v => ({ id: v.id, name: v.name, released: v.released, archived: v.archived, releaseDate: v.releaseDate ?? null }));
+}
+
+// Single-version lookup (by id, no project key needed) — used to resolve a version's
+// NAME when writing the idea-side release field on a project that isn't the release
+// space itself (JPD select fields write by label, not by the release space's version id).
+async function resolveVersionName(versionId) {
+  const res = await asUser().requestJira(route`/rest/api/3/version/${versionId}`, { headers: { Accept: 'application/json' } });
+  if (!res.ok) return null;
+  const body = await res.json();
+  return body.name ?? null;
+}
+
+// The idea-side release field can be a genuine Jira "version" field (a Version Picker
+// custom field, or fixVersions itself) or a plain option/select field (JPD's "Target
+// Release"). Both are written by NAME so Jira resolves the version within the ISSUE's
+// own project — but the two field kinds expect different JSON shapes, so the field's
+// schema has to be checked rather than assumed.
+async function getFieldSchema(fieldKey) {
+  if (!fieldKey || fieldKey === 'fixVersions') return { type: 'array', items: 'version' };
+  const res = await asUser().requestJira(route`/rest/api/3/field`, { headers: { Accept: 'application/json' } });
+  if (!res.ok) return null;
+  const fields = await res.json();
+  const field = (fields || []).find(f => f.key === fieldKey || f.id === fieldKey);
+  return field?.schema ?? null;
+}
+
+function buildReleaseFieldValue(schema, name) {
+  if (schema?.type === 'array' && schema?.items === 'version') return name ? [{ name }] : [];
+  if (schema?.type === 'version') return name ? { name } : null;
+  return name ? { value: name } : null;
 }
 
 resolver.define('getAll', async ({ payload }) => {
@@ -139,10 +194,11 @@ resolver.define('getAll', async ({ payload }) => {
     sprintSelectionByTeam: {},
   };
 
-  const [ideas, versions] = await Promise.all([
-    fetchIdeas(config.jiraCfg, ideaTeams ?? {}, ideaSizes ?? {}, ideaOrder ?? []),
-    fetchVersions(config.jiraCfg),
-  ]);
+  // Versions must be fetched first — fetchIdeas needs the release space's version
+  // list to resolve idea-side release-field values (which may be names, not ids) to
+  // real version ids.
+  const versions = await fetchVersions(config.jiraCfg);
+  const ideas = await fetchIdeas(config.jiraCfg, ideaTeams ?? {}, ideaSizes ?? {}, ideaOrder ?? [], versions);
 
   return { ideas, teams: config.teams ?? [], versions, release, config, currentUser };
 });
@@ -167,8 +223,10 @@ resolver.define('saveJiraCfg', async ({ payload }) => {
 
 // Validate Jira config — called by the Jira tab before enabling Save
 resolver.define('validateJiraCfg', async ({ payload }) => {
-  const { ideaSpace, sizeField, statusMap } = payload;
+  const { ideaSpace, releaseSpace, releaseSpaceField, sizeField, statusMap } = payload;
   const errors = [];
+
+  if (!releaseSpaceField) errors.push('Release space field is required.');
 
   // Check project exists and has Idea issue type
   try {
@@ -185,6 +243,26 @@ resolver.define('validateJiraCfg', async ({ payload }) => {
     }
   } catch (e) {
     errors.push(`Could not reach space "${ideaSpace}": ${e.message}`);
+  }
+
+  // Release space is optional (falls back to the idea space) — only validate it if set
+  if (releaseSpace) {
+    try {
+      const res = await asUser().requestJira(
+        route`/rest/api/3/project/${releaseSpace}`,
+        { headers: { Accept: 'application/json' } }
+      );
+      if (!res.ok) {
+        errors.push(`Release space "${releaseSpace}" not found or not accessible.`);
+      } else {
+        const body = await res.json();
+        if (body.projectTypeKey === 'product_discovery') {
+          errors.push(`Release space "${releaseSpace}" is a Jira Product Discovery project — it can't manage real Jira Versions. Pick a Jira Software or Business project.`);
+        }
+      }
+    } catch (e) {
+      errors.push(`Could not reach release space "${releaseSpace}": ${e.message}`);
+    }
   }
 
   // Check size field exists (if configured)
@@ -249,6 +327,26 @@ resolver.define('getProjectDetails', async ({ payload }) => {
   };
 });
 
+// Returns the field schema available on a project, merged across all its issue types —
+// unlike getProjectDetails' ideaFields, this isn't scoped to the "Idea" issue type, since
+// the release space project usually has no Idea type at all (fixVersions still applies).
+resolver.define('getProjectFields', async ({ payload }) => {
+  const { projectKey } = payload;
+  const metaRes = await asUser().requestJira(
+    route`/rest/api/3/issue/createmeta?projectKeys=${projectKey}&expand=projects.issuetypes.fields`,
+    { headers: { Accept: 'application/json' } }
+  );
+  const metaBody = metaRes.ok ? await metaRes.json() : {};
+  const issueTypes = metaBody.projects?.[0]?.issuetypes ?? [];
+  const fieldsByKey = new Map();
+  for (const it of issueTypes) {
+    for (const [key, f] of Object.entries(it.fields ?? {})) {
+      if (!fieldsByKey.has(key)) fieldsByKey.set(key, { key, name: f.name, type: f.schema?.type });
+    }
+  }
+  return { fields: [...fieldsByKey.values()] };
+});
+
 // Assign a team to an idea — stored in Forge Storage (not Jira's team field).
 // Jira's customfield_10001 requires real Atlassian team UUIDs; our config teams
 // use app-generated IDs, so we own team assignment here and overlay on getAll.
@@ -271,13 +369,22 @@ resolver.define('updateIdeaRelease', async ({ payload }) => {
   const releaseField = configRecord?.jiraCfg?.releaseField;
   if (!releaseField) return { ok: false, error: 'No release field configured' };
 
-  // Build field value based on field type (fixVersions = array, option = object)
+  // fixVersions on the release space's own project accepts a real version id directly.
+  // Any other field — a Version Picker custom field or a JPD "Target Release" select —
+  // writes by NAME, since the version id belongs to a different project's version list;
+  // the exact JSON shape depends on the field's schema (see buildReleaseFieldValue).
   let fieldValue;
   if (releaseField === 'fixVersions') {
     fieldValue = versionId ? [{ id: versionId }] : [];
   } else {
-    // Option/select field
-    fieldValue = versionId ? { id: versionId } : null;
+    const schema = await getFieldSchema(releaseField);
+    if (versionId) {
+      const name = await resolveVersionName(versionId);
+      if (!name) return { ok: false, error: 'Could not resolve the selected release.' };
+      fieldValue = buildReleaseFieldValue(schema, name);
+    } else {
+      fieldValue = buildReleaseFieldValue(schema, null);
+    }
   }
 
   const res = await asUser().requestJira(route`/rest/api/3/issue/${issueKey}`, {
@@ -286,6 +393,23 @@ resolver.define('updateIdeaRelease', async ({ payload }) => {
     body: JSON.stringify({ fields: { [releaseField]: fieldValue } }),
   });
   return { ok: res.ok, status: res.status };
+});
+
+// Change a release's target date directly on the real Jira Version (release space).
+// Surfaced from the "target date is later than the final sprint" conflict banner.
+resolver.define('updateVersionReleaseDate', async ({ payload }) => {
+  const { versionId, releaseDate } = payload;
+  if (!versionId) return { ok: false, error: 'No version specified' };
+  const res = await asUser().requestJira(route`/rest/api/3/version/${versionId}`, {
+    method: 'PUT',
+    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ releaseDate: releaseDate || null }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `${res.status} ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
 });
 
 // Create a new Idea in the configured idea space
@@ -301,9 +425,16 @@ resolver.define('createIdea', async ({ payload }) => {
   };
   if (size != null && jiraCfg.sizeField) fields[jiraCfg.sizeField] = size;
   if (releaseId && jiraCfg.releaseField) {
-    fields[jiraCfg.releaseField] = jiraCfg.releaseField === 'fixVersions'
-      ? [{ id: releaseId }]
-      : { id: releaseId };
+    if (jiraCfg.releaseField === 'fixVersions') {
+      fields[jiraCfg.releaseField] = [{ id: releaseId }];
+    } else {
+      const name = await resolveVersionName(releaseId);
+      if (name) {
+        const schema = await getFieldSchema(jiraCfg.releaseField);
+        const value = buildReleaseFieldValue(schema, name);
+        if (value != null && (!Array.isArray(value) || value.length)) fields[jiraCfg.releaseField] = value;
+      }
+    }
   }
   if (teamId) fields['customfield_10001'] = { id: teamId };
   const res = await asUser().requestJira(route`/rest/api/3/issue`, {
@@ -656,43 +787,10 @@ async function tryWritePoints(issueKey, points, sizeField) {
 }
 
 // Load per-idea conversion status (flat map keyed by idea issue key — conversion state
-// belongs to the idea, not to a specific release view) plus mismatch detection: if a
-// converted epic was later moved to a different Jira project than the idea's mapped team.
+// belongs to the idea, not to a specific release view).
 resolver.define('getConversion', async () => {
   const conversion = (await kvs.get('conversion')) ?? {};
-  const epicKeys = Object.values(conversion)
-    .filter(c => c.status === 'converted' && c.epicKey)
-    .map(c => c.epicKey);
-
-  const epicProjectByKey = {};
-  if (epicKeys.length) {
-    const jql = encodeURIComponent(`key in (${epicKeys.join(',')})`);
-    try {
-      let res = await asUser().requestJira(
-        route`/rest/api/3/search?jql=${jql}&maxResults=${epicKeys.length}&fields=project`,
-        { headers: { Accept: 'application/json' } }
-      );
-      if (res.status === 410 || res.status === 404) {
-        res = await asUser().requestJira(route`/rest/api/3/search/jql`, {
-          method: 'POST',
-          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jql: `key in (${epicKeys.join(',')})`, maxResults: epicKeys.length, fields: ['project'] }),
-        });
-      }
-      if (res.ok) {
-        const body = await res.json();
-        (body.issues || []).forEach(i => { epicProjectByKey[i.key] = i.fields.project?.key ?? null; });
-      }
-    } catch { /* best-effort — mismatch detection just won't show if this fails */ }
-  }
-
-  // Map idea key -> the epic's CURRENT project key (null if epic was deleted/inaccessible)
-  const epicProjectByIdea = {};
-  Object.entries(conversion).forEach(([ideaKey, c]) => {
-    if (c.status === 'converted' && c.epicKey) epicProjectByIdea[ideaKey] = epicProjectByKey[c.epicKey] ?? null;
-  });
-
-  return { conversion, epicProjectByIdea };
+  return { conversion };
 });
 
 // Convert an idea into a real Jira Epic (+ child Stories split across sprints) or a
