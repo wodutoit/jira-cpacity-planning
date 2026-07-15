@@ -5,7 +5,9 @@
   "permissions": {
     "allow": [
       "Bash(forge lint *)",
-      "Bash(forge deploy *)"
+      "Bash(forge deploy *)",
+      "Read(//c/Users/wdutoit/.claude/projects/c--Dev-github-projects-jira-cpacity-planning/memory/**)",
+      "Bash(forge logs *)"
     ],
     "additionalDirectories": [
       "c:\\Dev\\github_projects\\jira-cpacity-planning\\.claude"

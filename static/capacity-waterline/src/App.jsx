@@ -40,7 +40,7 @@ export default function App() {
 
   if (loading || !historyReady) {
     return (
-      <div className="center-msg">Loading Release Capacity Planning…</div>
+      <div className="center-msg" data-app-shell="true">Loading Release Capacity Planning…</div>
     );
   }
 

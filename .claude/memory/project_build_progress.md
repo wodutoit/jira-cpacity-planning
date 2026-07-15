@@ -73,7 +73,8 @@ metadata:
 ### Forge deploy quirk
 - forge deploy has Windows lint bug → use --no-verify always
 - handler: index.handler in manifest (Forge prepends src/)
-- `forge install --upgrade` requires an interactive TTY (site picker) — can't be run non-interactively; ask the user to run it themselves after adding new scopes
+- **Correction (2026-07-15): `forge install --upgrade` CAN run non-interactively** — earlier sessions assumed it needed an interactive TTY site-picker and told the user to run it themselves. Verified this is wrong: `forge install --upgrade -e <env> -s <site> -p jira --confirm-scopes --non-interactive` works fine (tested against the real dev install on prediktivity.atlassian.net). Same flags work for a fresh (non-upgrade) install to a new environment too — used this to stand up the staging environment. Going forward, run this myself after adding a new scope instead of asking the user to.
+- Multiple environments (dev/staging/production) can be installed concurrently on the SAME site — each is a separate installation with fully isolated Forge Storage (KVS) and its own URL (`/jira/apps/{appId}/{envId}`), so they show as separate-but-identically-labeled sidebar entries in Jira. Config/teams/jiraCfg do NOT carry over between environments — each needs its own setup from scratch after install. Staged this way for prediktivity.atlassian.net: dev (installation `89282267...`) and staging (installation `79611ca7...`) both live now.
 
 ## Tabs shipped
 
@@ -195,8 +196,9 @@ manage:jira-project, storage:app
 - `forge lint` did not flag any new scope requirement for the Bulk Issue Move API call (`/rest/api/3/bulk/issues/move`) added for Waterline's cross-team move — likely because the linter's static endpoint→scope map doesn't recognize this newer API, not necessarily because no additional scope is needed. If cross-team move fails at runtime with a permission-style error, check whether a newer/broader scope (beyond `write:issue:jira`) is required and add it.
 
 ## What's next
-- Delivery Planning Stages 1-4 are all built. Of the 4 spec-vs-build gaps identified in a prior session (planning-mode smoothing suggestion, Delivery editors-gating, theme, release target-date banner), 3 are now done; the remaining one is **bulk-create-future-sprints**, which the requirements doc itself marks optional (D2: "Optionally bulk-create future sprints") — not implemented, not asked for explicitly, worth checking with the user before spending effort on it.
-- Also queued: live-instance testing of Stage 3's cross-team move (see Known limitations), or a new feature area entirely — nothing else is queued unless the user asks.
+
+- Delivery Planning Stages 1-4 are all built and functionally signed off by the user (2026-07-15) — dark theme and cross-team move both confirmed working live. The only remaining spec-vs-build gap is **bulk-create-future-sprints**, which the requirements doc itself marks optional (D2) — not implemented, not asked for explicitly.
+- Process gaps flagged but not yet acted on (user hasn't asked for these): no automated tests/CI exist at all; everything has only been deployed to the Forge `development` environment (`forge deploy -e staging`/`production` + `forge install --upgrade` needed to promote); recent commits aren't tagged `[ai-assisted]` per org policy.
 
 ### Known limitations / gaps
 - Teams API dead: no Jira sync for team identity, Config-only
@@ -204,7 +206,6 @@ manage:jira-project, storage:app
 - RICE popover: only in Release Planning (not in Intake dots → they write directly)
 - By version mode: idea table works but shows all versions' ideas when no filter selected
 - Delivery board link (delete dialog) assumes `/jira/software/projects/{key}/boards/{id}` URL pattern — not verified across all Jira Cloud tiers
-- Dark theme is unverified against a real Jira dark-mode session (couldn't test live from here) — the token *values* for the dark palette are reasonable approximations, not extracted pixel-for-pixel from the prototype's own dark theme (couldn't get exact hex without disproportionate research cost). Sanity-check contrast/legibility in an actual dark-mode Jira instance.
-- `JiraTab.jsx`'s raw `@atlaskit/select`/`@atlaskit/spinner` usage may not follow dark mode (see architecture decisions above).
-- **Waterline's cross-team move (Bulk Issue Move API) is unverified against a live Jira instance** — this session couldn't test it end-to-end; the exact request/response contract for `/rest/api/3/bulk/issues/move` was implemented from training knowledge, not confirmed live. Test with a real cross-project move before relying on it. Likely failure modes: target project missing required fields Jira can't infer, the async task not completing within the 3s poll window (falls back to `status: 'pending'`, not a failure but not confirmed-complete either), or the API being gated behind a scope/plan not currently granted.
-- Moving a single child story cross-team (not its parent epic) may silently drop the parent-epic link, since team-managed epic↔story links require both issues in the same project — not currently detected or warned about.
+- Dark theme: user confirmed it looks good in a real Jira dark-mode session (2026-07-15) — no longer an open risk.
+- Waterline's cross-team move (Bulk Issue Move API): user confirmed it works against a live instance (2026-07-15) — no longer an open risk. Edge case not re-tested: moving a single child story cross-team (not its parent epic) may still silently drop the parent-epic link, since team-managed epic↔story links require both issues in the same project.
+- `JiraTab.jsx`'s raw `@atlaskit/select`/`@atlaskit/spinner` usage may not follow dark mode (see architecture decisions above) — not specifically re-checked even though the overall dark theme pass was confirmed good.
