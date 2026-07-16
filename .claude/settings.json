@@ -9,7 +9,10 @@
       "Read(//c/Users/wdutoit/.claude/projects/c--Dev-github-projects-jira-cpacity-planning/memory/**)",
       "Bash(forge logs *)",
       "Read(//c/Users/wdutoit/AppData/Local/Temp/**)",
-      "Bash(cp \"C:/Users/wdutoit/AppData/Local/Temp/rcp-icon.png\" \"c:/Dev/github_projects/jira-cpacity-planning/static/capacity-waterline/public/icons/icon.png\" *)"
+      "Bash(cp \"C:/Users/wdutoit/AppData/Local/Temp/rcp-icon.png\" \"c:/Dev/github_projects/jira-cpacity-planning/static/capacity-waterline/public/icons/icon.png\" *)",
+      "Bash(cat ~/.claude/skills/gstack/bin/gstack-uninstall 2>/dev/null || echo \"FILE_NOT_FOUND\")",
+      "Read(//c/Users/wdutoit/.claude/skills/gstack/bin/**)",
+      "Bash(~/.claude/skills/gstack/bin/gstack-uninstall --force)"
     ],
     "additionalDirectories": [
       "c:\\Dev\\github_projects\\jira-cpacity-planning\\.claude",
