@@ -1298,4 +1298,36 @@ resolver.define('moveWaterlineItem', async ({ payload }) => {
   return { ok: true, moved: 'project', status };
 });
 
+// Sum completed (Done status category) story points for a closed sprint — velocity capture.
+resolver.define('getSprintVelocity', async ({ payload }) => {
+  const { sprintId } = payload;
+  const config = (await kvs.get('config')) ?? {};
+  const sizeField = config.jiraCfg?.sizeField;
+  const fieldsParam = [sizeField, 'customfield_10016', 'status'].filter(Boolean).join(',');
+
+  let velocity = 0;
+  let startAt = 0;
+
+  for (;;) {
+    const res = await asUser().requestJira(
+      route`/rest/agile/1.0/sprint/${sprintId}/issue?fields=${fieldsParam}&maxResults=100&startAt=${startAt}`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (!res.ok) return { ok: false, error: `Jira returned ${res.status}` };
+    const data = await res.json();
+    const issues = data.issues || [];
+    for (const issue of issues) {
+      if (issue.fields?.status?.statusCategory?.key === 'done') {
+        const pts = (sizeField && issue.fields[sizeField] != null)
+          ? issue.fields[sizeField]
+          : (issue.fields?.customfield_10016 ?? 0);
+        velocity += typeof pts === 'number' ? pts : 0;
+      }
+    }
+    startAt += issues.length;
+    if (!issues.length || startAt >= (data.total ?? 0)) break;
+  }
+  return { ok: true, velocity: Math.round(velocity) };
+});
+
 exports.handler = resolver.getDefinitions();

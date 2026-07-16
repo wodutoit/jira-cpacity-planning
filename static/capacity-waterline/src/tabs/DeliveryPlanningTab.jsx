@@ -223,7 +223,7 @@ function DeleteSprintDialog({ teamName, sprintName, state, count, error, boardHr
 }
 
 // ── Sprint Selection Card ─────────────────────────────────────────────────────
-function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missingByTeam, collapsed, boardError, sprintAllocations, versions, hideAllocated, onHideAllocatedChange, onToggleSprint, onToggleSection, onAddSprint, onEditSprint, onDeleteSprint, onCapChange, onRemoveMissing, onRecreateMissing }) {
+function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missingByTeam, collapsed, boardError, sprintAllocations, versions, hideAllocated, onHideAllocatedChange, hideClosed, onHideClosedChange, closedFrom, closedTo, onClosedRangeChange, velocityLoadingKeys, onVelocityChange, onGetVelocity, onToggleSprint, onToggleSection, onAddSprint, onEditSprint, onDeleteSprint, onCapChange, onRemoveMissing, onRecreateMissing }) {
   const stateOrder = { active: 0, future: 1, closed: 2 };
   const versionNameById = Object.fromEntries((versions || []).map(v => [v.id, v.name]));
 
@@ -232,11 +232,28 @@ function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missi
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Sprint selection</div>
         <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 4 }}>Pick upcoming sprints from each team's board. Each checked sprint feeds the waterline — set its capacity below, inherited from the team's base.</div>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 8, cursor: 'pointer', fontSize: 12, color: 'var(--text-subtle)' }}>
-          <input type="checkbox" checked={hideAllocated} onChange={e => onHideAllocatedChange(e.target.checked)}
-            style={{ width: 14, height: 14, cursor: 'pointer', accentColor: 'var(--brand)' }} />
-          Hide allocated sprints
-        </label>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, marginTop: 8 }}>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer', fontSize: 12, color: 'var(--text-subtle)' }}>
+            <input type="checkbox" checked={hideAllocated} onChange={e => onHideAllocatedChange(e.target.checked)}
+              style={{ width: 14, height: 14, cursor: 'pointer', accentColor: 'var(--brand)' }} />
+            Hide allocated sprints
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, cursor: 'pointer', fontSize: 12, color: 'var(--text-subtle)' }}>
+            <input type="checkbox" checked={hideClosed} onChange={e => onHideClosedChange(e.target.checked)}
+              style={{ width: 14, height: 14, cursor: 'pointer', accentColor: 'var(--brand)' }} />
+            Hide closed sprints
+          </label>
+        </div>
+        {!hideClosed && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-subtlest)' }}>Show closed from</span>
+            <input type="date" value={closedFrom} onChange={e => onClosedRangeChange(e.target.value, closedTo)}
+              style={{ border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)', color: 'var(--text)', padding: '4px 8px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }} />
+            <span style={{ fontSize: 12, color: 'var(--text-subtlest)' }}>to</span>
+            <input type="date" value={closedTo} onChange={e => onClosedRangeChange(closedFrom, e.target.value)}
+              style={{ border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)', color: 'var(--text)', padding: '4px 8px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }} />
+          </div>
+        )}
       </div>
 
       {boardError === 'no_config' && (
@@ -299,7 +316,18 @@ function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missi
                   teamSprints
                     .filter(sp => {
                       const allocatedTo = sprintAllocations[sp.id];
-                      return !hideAllocated || !allocatedTo;
+                      if (hideAllocated && allocatedTo) return false;
+                      // Always keep selected sprints visible regardless of closed filter
+                      if (selIds.has(sp.id)) return true;
+                      if (sp.state === 'closed') {
+                        if (hideClosed) return false;
+                        if (sp.endDate) {
+                          const end = sp.endDate.slice(0, 10);
+                          if (closedFrom && end < closedFrom) return false;
+                          if (closedTo && end > closedTo) return false;
+                        }
+                      }
+                      return true;
                     })
                     .map(sp => {
                     const checked = selIds.has(sp.id);
@@ -353,9 +381,15 @@ function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missi
                             </>
                           )}
                         </div>
-                        {checked && !isReadonly && (
+                        {(checked || sp.state === 'closed') && !isReadonly && (
                           <div style={{ marginLeft: 28, marginTop: 6 }}>
-                            <InlineCapacityEditor overrideKey={overrideKey} basePts={basePts} ov={ov} onCapChange={onCapChange} />
+                            <InlineCapacityEditor
+                              overrideKey={overrideKey} basePts={basePts} ov={ov} onCapChange={onCapChange}
+                              isClosed={sp.state === 'closed'}
+                              velocityLoading={velocityLoadingKeys?.has(overrideKey) ?? false}
+                              onVelocityChange={v => onVelocityChange(overrideKey, v)}
+                              onGetVelocity={() => onGetVelocity(t.id, sp.id)}
+                            />
                           </div>
                         )}
                       </div>
@@ -379,7 +413,7 @@ function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missi
       {/* Legend */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px', background: 'var(--surface-sunken)', color: 'var(--text-subtlest)', fontSize: 11 }}>
         <span style={{ width: 8, height: 8, borderRadius: 2, background: 'var(--ok)', opacity: .7, flexShrink: 0 }} />
-        Active &amp; future sprints · completed sprints shown when part of this release
+        Active &amp; future sprints always shown · closed sprints visible when selected, or when 'Hide closed sprints' is off
       </div>
     </div>
   );
@@ -462,15 +496,18 @@ function BaseCapacityCard({ teams, onBaseCap }) {
 
 // ── Inline per-sprint capacity editor (lives inside a Sprint Selection row) ────
 // Populated from the team's base capacity; edits create a per-sprint override.
-function InlineCapacityEditor({ overrideKey, basePts, ov, onCapChange }) {
+// When isClosed=true (sprint is complete) a Velocity row is shown below Capacity.
+function InlineCapacityEditor({ overrideKey, basePts, ov, onCapChange, isClosed, velocityLoading, onVelocityChange, onGetVelocity }) {
   const hasOv = ov.pts != null && ov.pts !== basePts;
   const [localPts, setLocalPts] = useState(ov.pts != null ? ov.pts : basePts);
   const [localNote, setLocalNote] = useState(ov.note || '');
+  const [localVelocity, setLocalVelocity] = useState(ov.velocity != null ? ov.velocity : '');
 
   useEffect(() => {
     setLocalPts(ov.pts != null ? ov.pts : basePts);
     setLocalNote(ov.note || '');
-  }, [ov.pts, ov.note, basePts]);
+    setLocalVelocity(ov.velocity != null ? ov.velocity : '');
+  }, [ov.pts, ov.note, ov.velocity, basePts]);
 
   const commit = (pts, note) => onCapChange(overrideKey, pts, note);
   const reset = () => { setLocalPts(basePts); setLocalNote(''); commit(null, ''); };
@@ -504,6 +541,28 @@ function InlineCapacityEditor({ overrideKey, basePts, ov, onCapChange }) {
             style={{ background: 'transparent', border: 'none', color: 'var(--brand)', cursor: 'pointer', fontSize: 11, fontWeight: 600, fontFamily: 'inherit', padding: 2, whiteSpace: 'nowrap' }}
           >
             ↺ reset to base
+          </button>
+        </>
+      )}
+      {isClosed && (
+        <>
+          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-subtlest)', marginLeft: 4 }}>Velocity</span>
+          <input
+            type="number" min={0}
+            value={localVelocity}
+            onChange={e => setLocalVelocity(e.target.value === '' ? '' : Number(e.target.value))}
+            onBlur={() => onVelocityChange?.(localVelocity === '' ? null : Number(localVelocity))}
+            style={{ width: 58, textAlign: 'center', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)', color: 'var(--text)', padding: '4px 6px', fontSize: 12, fontFamily: 'inherit', outline: 'none', fontVariantNumeric: 'tabular-nums' }}
+          />
+          <span style={{ fontSize: 11, color: 'var(--text-subtlest)' }}>pts</span>
+          <button
+            onClick={onGetVelocity}
+            disabled={velocityLoading}
+            style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 8px', fontSize: 11, fontWeight: 600, color: velocityLoading ? 'var(--text-subtlest)' : 'var(--brand)', cursor: velocityLoading ? 'default' : 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
+          >
+            {velocityLoading
+              ? <><span className="btn-spin" style={{ width: 9, height: 9, borderColor: 'var(--border)', borderTopColor: 'var(--brand)' }} /> Getting…</>
+              : '↻ Get Velocity'}
           </button>
         </>
       )}
@@ -1547,6 +1606,16 @@ export default function DeliveryPlanningTab({ data, onRefresh }) {
   const [dateError, setDateError] = useState(null);
   const [sprintAllocations, setSprintAllocations] = useState({}); // sprintId → versionId
   const [hideAllocated, setHideAllocated] = useState(false);
+  const [hideClosed, setHideClosed] = useState(true);
+  const [closedFrom, setClosedFrom] = useState(() => {
+    const d = new Date(); d.setFullYear(d.getFullYear() - 1);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  });
+  const [closedTo, setClosedTo] = useState(() => {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  });
+  const [velocityLoadingKeys, setVelocityLoadingKeys] = useState(new Set());
   // Local teams state so base capacity edits are reflected immediately
   const [localTeams, setLocalTeams] = useState(teams);
   useEffect(() => setLocalTeams(teams), [teams]);
@@ -1609,6 +1678,29 @@ export default function DeliveryPlanningTab({ data, onRefresh }) {
       return { ...prev, [overrideKey]: { pts, note } };
     });
     setDirty(true); setSaved(false);
+  }, [canEdit]);
+
+  const handleVelocityChange = useCallback((overrideKey, velocity) => {
+    if (!canEdit) return;
+    setOverrides(prev => ({ ...prev, [overrideKey]: { ...(prev[overrideKey] || {}), velocity } }));
+    setDirty(true); setSaved(false);
+  }, [canEdit]);
+
+  const handleGetVelocity = useCallback(async (teamId, sprintId) => {
+    if (!canEdit) return;
+    const overrideKey = `${teamId}:${sprintId}`;
+    setVelocityLoadingKeys(prev => new Set([...prev, overrideKey]));
+    try {
+      const res = await invoke('getSprintVelocity', { sprintId });
+      if (res.ok) {
+        setOverrides(prev => ({ ...prev, [overrideKey]: { ...(prev[overrideKey] || {}), velocity: res.velocity } }));
+        setDirty(true); setSaved(false);
+      }
+    } catch (e) {
+      console.error('Failed to get velocity', e);
+    } finally {
+      setVelocityLoadingKeys(prev => { const next = new Set(prev); next.delete(overrideKey); return next; });
+    }
   }, [canEdit]);
 
   // Create a real sprint on the team's Jira board via the Agile API.
@@ -1991,6 +2083,14 @@ export default function DeliveryPlanningTab({ data, onRefresh }) {
                   versions={versions}
                   hideAllocated={hideAllocated}
                   onHideAllocatedChange={setHideAllocated}
+                  hideClosed={hideClosed}
+                  onHideClosedChange={setHideClosed}
+                  closedFrom={closedFrom}
+                  closedTo={closedTo}
+                  onClosedRangeChange={(from, to) => { setClosedFrom(from); setClosedTo(to); }}
+                  velocityLoadingKeys={velocityLoadingKeys}
+                  onVelocityChange={handleVelocityChange}
+                  onGetVelocity={handleGetVelocity}
                   onToggleSprint={toggleSprint}
                   onToggleSection={toggleSection}
                   onAddSprint={teamId => { setSprintError(null); setAddSprintTeam(teamId); }}
