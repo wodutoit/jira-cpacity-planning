@@ -223,14 +223,20 @@ function DeleteSprintDialog({ teamName, sprintName, state, count, error, boardHr
 }
 
 // ── Sprint Selection Card ─────────────────────────────────────────────────────
-function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missingByTeam, collapsed, boardError, onToggleSprint, onToggleSection, onAddSprint, onEditSprint, onDeleteSprint, onCapChange, onRemoveMissing, onRecreateMissing }) {
+function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missingByTeam, collapsed, boardError, sprintAllocations, versions, hideAllocated, onHideAllocatedChange, onToggleSprint, onToggleSection, onAddSprint, onEditSprint, onDeleteSprint, onCapChange, onRemoveMissing, onRecreateMissing }) {
   const stateOrder = { active: 0, future: 1, closed: 2 };
+  const versionNameById = Object.fromEntries((versions || []).map(v => [v.id, v.name]));
 
   return (
     <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Sprint selection</div>
-        <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 2 }}>Pick upcoming sprints from each team's board. Each checked sprint feeds the waterline — set its capacity below, inherited from the team's base.</div>
+        <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 4 }}>Pick upcoming sprints from each team's board. Each checked sprint feeds the waterline — set its capacity below, inherited from the team's base.</div>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, marginTop: 8, cursor: 'pointer', fontSize: 12, color: 'var(--text-subtle)' }}>
+          <input type="checkbox" checked={hideAllocated} onChange={e => onHideAllocatedChange(e.target.checked)}
+            style={{ width: 14, height: 14, cursor: 'pointer', accentColor: 'var(--brand)' }} />
+          Hide allocated sprints
+        </label>
       </div>
 
       {boardError === 'no_config' && (
@@ -290,46 +296,64 @@ function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missi
                     No sprints found on this board.
                   </div>
                 ) : (
-                  teamSprints.map(sp => {
+                  teamSprints
+                    .filter(sp => {
+                      const allocatedTo = sprintAllocations[sp.id];
+                      return !hideAllocated || !allocatedTo;
+                    })
+                    .map(sp => {
                     const checked = selIds.has(sp.id);
+                    const allocatedTo = sprintAllocations[sp.id]; // versionId of other release, or undefined
+                    const allocatedName = allocatedTo ? (versionNameById[allocatedTo] ?? allocatedTo) : null;
+                    const isReadonly = !!allocatedTo; // allocated to another version → readonly
                     const dateRange = sp.startDate && sp.endDate
                       ? fmtDate(sp.startDate) + ' – ' + fmtDate(sp.endDate) : '';
                     const overrideKey = `${t.id}:${sp.id}`;
                     const basePts = t.sprintCap ?? 0;
                     const ov = overrides[overrideKey] || {};
                     return (
-                      <div key={sp.id} style={{ borderRadius: 6, padding: '8px 12px', background: checked ? 'var(--surface-sunken)' : 'transparent' }}>
+                      <div key={sp.id} style={{ borderRadius: 6, padding: '7px 12px', background: checked ? 'var(--surface-sunken)' : 'transparent', opacity: isReadonly ? 0.6 : 1 }}>
                         <div
-                          onClick={() => onToggleSprint(t.id, sp.id)}
-                          style={{ display: 'flex', alignItems: 'center', gap: 11, cursor: 'pointer' }}
+                          onClick={() => !isReadonly && onToggleSprint(t.id, sp.id)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 11, cursor: isReadonly ? 'default' : 'pointer' }}
                         >
-                          {/* Checkbox */}
-                          <div style={checked
-                            ? { width: 17, height: 17, borderRadius: 4, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--brand)', color: '#fff', fontSize: 11, fontWeight: 800, border: '1px solid var(--brand)' }
-                            : { width: 17, height: 17, borderRadius: 4, flexShrink: 0, background: 'var(--surface)', border: '1.5px solid var(--border)' }
-                          }>{checked ? '✓' : ''}</div>
-                          {/* Name + dates */}
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{sp.name}</div>
-                            {dateRange && <div style={{ fontSize: 11, color: 'var(--text-subtlest)' }}>{dateRange}</div>}
+                          {/* Checkbox — disabled for allocated sprints */}
+                          {isReadonly ? (
+                            <div style={{ width: 17, height: 17, borderRadius: 4, flexShrink: 0, background: 'var(--surface-sunken)', border: '1.5px solid var(--border)' }} />
+                          ) : (
+                            <div style={checked
+                              ? { width: 17, height: 17, borderRadius: 4, flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: 'var(--brand)', color: '#fff', fontSize: 11, fontWeight: 800, border: '1px solid var(--brand)' }
+                              : { width: 17, height: 17, borderRadius: 4, flexShrink: 0, background: 'var(--surface)', border: '1.5px solid var(--border)' }
+                            }>{checked ? '✓' : ''}</div>
+                          )}
+                          {/* Single-line: Name (date range)  [Allocated version] */}
+                          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap' }}>
+                              {sp.name}{dateRange ? ` (${dateRange})` : ''}
+                            </span>
+                            {allocatedName && (
+                              <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--filling-text)', background: 'var(--filling-bg)', border: '1px solid var(--filling-border)', borderRadius: 4, padding: '1px 7px', whiteSpace: 'nowrap' }}>
+                                {allocatedName}
+                              </span>
+                            )}
                           </div>
                           <SprintLoz state={sp.state ?? 'future'} />
-                          <button
-                            onClick={e => { e.stopPropagation(); onEditSprint(t.id, sp); }}
-                            title="Edit sprint"
-                            style={{ border: 'none', background: 'transparent', color: 'var(--text-subtlest)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '3px 4px', fontFamily: 'inherit', flexShrink: 0 }}
-                          >
-                            ✎
-                          </button>
-                          <button
-                            onClick={e => { e.stopPropagation(); onDeleteSprint(t.id, sp); }}
-                            title="Delete sprint"
-                            style={{ border: 'none', background: 'transparent', color: 'var(--text-subtlest)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '3px 4px', fontFamily: 'inherit', flexShrink: 0 }}
-                          >
-                            🗑
-                          </button>
+                          {!isReadonly && (
+                            <>
+                              <button
+                                onClick={e => { e.stopPropagation(); onEditSprint(t.id, sp); }}
+                                title="Edit sprint"
+                                style={{ border: 'none', background: 'transparent', color: 'var(--text-subtlest)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '3px 4px', fontFamily: 'inherit', flexShrink: 0 }}
+                              >✎</button>
+                              <button
+                                onClick={e => { e.stopPropagation(); onDeleteSprint(t.id, sp); }}
+                                title="Delete sprint"
+                                style={{ border: 'none', background: 'transparent', color: 'var(--text-subtlest)', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '3px 4px', fontFamily: 'inherit', flexShrink: 0 }}
+                              >🗑</button>
+                            </>
+                          )}
                         </div>
-                        {checked && (
+                        {checked && !isReadonly && (
                           <div style={{ marginLeft: 28, marginTop: 6 }}>
                             <InlineCapacityEditor overrideKey={overrideKey} basePts={basePts} ov={ov} onCapChange={onCapChange} />
                           </div>
@@ -1521,6 +1545,8 @@ export default function DeliveryPlanningTab({ data, onRefresh }) {
   const [showDateDialog, setShowDateDialog] = useState(false);
   const [dateSaving, setDateSaving] = useState(false);
   const [dateError, setDateError] = useState(null);
+  const [sprintAllocations, setSprintAllocations] = useState({}); // sprintId → versionId
+  const [hideAllocated, setHideAllocated] = useState(false);
   // Local teams state so base capacity edits are reflected immediately
   const [localTeams, setLocalTeams] = useState(teams);
   useEffect(() => setLocalTeams(teams), [teams]);
@@ -1529,6 +1555,15 @@ export default function DeliveryPlanningTab({ data, onRefresh }) {
   useEffect(() => setLocalIdeas(ideas), [ideas]);
   const [conversion, setConversion] = useState({});
   const [convertLoading, setConvertLoading] = useState(false);
+
+  // Load sprint allocations across all other versions whenever versionId changes
+  useEffect(() => {
+    const allVersionIds = versions.map(v => v.id);
+    if (!allVersionIds.length) return;
+    invoke('getSprintAllocations', { versionIds: allVersionIds, currentVersionId: versionId })
+      .then(res => setSprintAllocations(res?.allocations ?? {}))
+      .catch(() => setSprintAllocations({}));
+  }, [versionId, versions.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load delivery data when version changes
   useEffect(() => {
@@ -1799,17 +1834,18 @@ export default function DeliveryPlanningTab({ data, onRefresh }) {
     return localTeams.find(t => t.id === teamId)?.sprintCap ?? 0;
   };
 
-  // Coverage: matches prototype exactly.
-  // cap = ONLY the explicitly set release capacity (from Release Planning tab waterline).
-  // No fallback to sprintCap*sprintsPerRelease — if nothing is set, hasCap=false → "No capacity".
-  // covered = availableCap >= cap  OR  addedSprints >= plannedSprints
+  // Coverage: cap = explicit release capacity saved from Release Planning, falling back
+  // to team.sprintCap × team.sprintsPerRelease from Config when nothing has been
+  // explicitly set. Without the fallback, teams always show "No capacity" until the
+  // user visits Release Planning and saves — that's a confusing first-time experience.
   const releaseCapacity = deliveryData?.releaseCapacity || {};
   const coverage = localTeams.map(t => {
     const selIds = selection[t.id] || [];
     const addedSprints = selIds.length;
     const plannedSprints = t.sprintsPerRelease || 0;
     const availableCap = selIds.reduce((acc, sid) => acc + getCap(t.id, sid), 0);
-    const cap = releaseCapacity[t.id] ?? null;
+    const defaultCap = (t.sprintCap ?? 0) * (t.sprintsPerRelease ?? 0);
+    const cap = releaseCapacity[t.id] ?? (defaultCap > 0 ? defaultCap : null);
     const hasCap = cap != null && cap > 0;
     const sprintShort = Math.max(0, plannedSprints - addedSprints);
     const covered = hasCap ? (availableCap >= cap || addedSprints >= plannedSprints) : true;
@@ -1951,6 +1987,10 @@ export default function DeliveryPlanningTab({ data, onRefresh }) {
                   missingByTeam={deliveryData.missingByTeam || {}}
                   collapsed={collapsed}
                   boardError={deliveryData.boardError}
+                  sprintAllocations={sprintAllocations}
+                  versions={versions}
+                  hideAllocated={hideAllocated}
+                  onHideAllocatedChange={setHideAllocated}
                   onToggleSprint={toggleSprint}
                   onToggleSection={toggleSection}
                   onAddSprint={teamId => { setSprintError(null); setAddSprintTeam(teamId); }}

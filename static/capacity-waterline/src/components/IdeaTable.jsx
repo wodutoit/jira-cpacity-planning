@@ -144,30 +144,35 @@ export default function IdeaTable({
 
   const rowStates = computeRowStates(ideas, teams ?? [], scale, versionId, capByTeam, threshold);
 
-  // planVisible: ideas with a RICE score and not New status
-  const planIdeas = ideas.filter(i => {
-    const score = riceScore(i);
-    return score != null && score > 0;
-  });
+  // Scored ideas (RICE > 0) drive the waterline — these go into team groups.
+  const scoredIdeas = ideas.filter(i => { const s = riceScore(i); return s != null && s > 0; });
 
-  // Apply team filter if set
-  const filtered = teamFilter ? planIdeas.filter(i => i.team === teamFilter) : planIdeas;
+  // Apply team filter if set (only affects scored/assigned ideas)
+  const filtered = teamFilter ? scoredIdeas.filter(i => i.team === teamFilter) : scoredIdeas;
 
   // Version filtering: versionIds array overrides single versionId
   const versionSet = versionIds ? new Set(versionIds) : null;
-  const inVersion = filtered.filter(i =>
-    versionSet ? versionSet.has(i.release) : i.release === versionId
-  );
+  const matchesVersion = i => versionSet ? versionSet.has(i.release) : i.release === versionId;
+
+  const inVersion = filtered.filter(matchesVersion);
   const byTeam = {};
   for (const idea of inVersion) {
     const key = idea.team ?? '__unassigned';
     (byTeam[key] = byTeam[key] ?? []).push(idea);
   }
 
+  // Unassigned: all ideas with the selected version and no team, regardless of RICE score.
+  // These are shown separately so planners know they still need team assignment.
+  const allInVersion = ideas.filter(matchesVersion);
+  const unassignedAll = allInVersion.filter(i => !i.team);
+  // Merge: unassigned from scored ideas + unscored ideas with no team
+  const unassigned = unassignedAll.length > 0 ? unassignedAll : (byTeam['__unassigned'] ?? []);
+  // Remove unassigned from scored byTeam if present (avoid double-counting)
+  delete byTeam['__unassigned'];
+
   const assignedGroups = (teams ?? [])
     .map(t => ({ team: t, ideas: byTeam[t.id] ?? [] }))
     .filter(g => g.ideas.length > 0);
-  const unassigned = byTeam['__unassigned'] ?? [];
 
   const toggleGroup = key => setCollapsed(c => ({ ...c, [key]: !c[key] }));
 

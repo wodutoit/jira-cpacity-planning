@@ -7,7 +7,41 @@ const SIZES = ['XS', 'S', 'M', 'L', 'XL'];
 const DEFAULT_SCALE = { XS: 1, S: 3, M: 8, L: 13, XL: 21 };
 
 function newTeam() {
-  return { id: `team-${Date.now()}`, name: '', sprintWeeks: 2, sprintCap: 20, sprintsPerRelease: 3, boardId: null, boardName: '' };
+  return { id: `team-${Date.now()}`, name: '', teamJiraId: null, sprintWeeks: 2, sprintCap: 20, sprintsPerRelease: 3, boardId: null, boardName: '' };
+}
+
+// Dropdown for selecting a team from the configured Jira Select field options.
+// Options are fetched from the field's allowedValues via the issue create metadata.
+function TeamSelect({ options, optionsLoading, optionsError, onSelect }) {
+  const [selected, setSelected] = useState('');
+
+  const commit = () => {
+    const opt = options.find(o => o.name === selected);
+    if (!opt) return;
+    onSelect({ name: opt.name, id: null });
+    setSelected('');
+  };
+
+  if (optionsLoading) return <span style={{ fontSize: 12, color: 'var(--text-subtlest)' }}>Loading options…</span>;
+
+  if (optionsError || !options.length) return (
+    <span style={{ fontSize: 12, color: 'var(--over-text)' }}>
+      {optionsError || 'No options — set a Select List field in Jira Config first.'}
+    </span>
+  );
+
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <select className="config-input" value={selected} onChange={e => setSelected(e.target.value)} style={{ flex: 1 }}>
+        <option value="">— select team —</option>
+        {options.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+      </select>
+      <button type="button" onClick={commit} disabled={!selected}
+        style={{ flexShrink: 0, background: selected ? 'var(--brand)' : 'var(--surface-sunken)', color: selected ? '#fff' : 'var(--text-subtlest)', border: 'none', borderRadius: 4, padding: '4px 12px', fontSize: 12, fontWeight: 600, cursor: selected ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+        Add
+      </button>
+    </div>
+  );
 }
 
 export default function ConfigTab({ data, onRefresh }) {
@@ -24,6 +58,9 @@ export default function ConfigTab({ data, onRefresh }) {
   const [boards, setBoards] = useState([]);
   const [boardsLoaded, setBoardsLoaded] = useState(false);
   const [boardsError, setBoardsError] = useState(null);
+  const [teamOptions, setTeamOptions] = useState([]);
+  const [teamOptionsLoading, setTeamOptionsLoading] = useState(true);
+  const [teamOptionsError, setTeamOptionsError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -39,6 +76,7 @@ export default function ConfigTab({ data, onRefresh }) {
     resolveOrSet(cfg.admins ?? [], setAdmins, setAdminsLoaded);
     resolveOrSet(cfg.editors ?? [], setEditors, setEditorsLoaded);
     invoke('getBoards').then(res => { setBoards(res.boards || []); if (res.error) setBoardsError(res.error); }).finally(() => setBoardsLoaded(true));
+    invoke('getJiraTeams').then(res => { setTeamOptions(res?.teams ?? []); if (res?.error) setTeamOptionsError(res.error); }).catch(e => setTeamOptionsError(String(e))).finally(() => setTeamOptionsLoading(false));
   }, []);
 
   const touch = () => { setDirty(true); setSaved(false); };
@@ -46,6 +84,14 @@ export default function ConfigTab({ data, onRefresh }) {
   // ── Teams ──────────────────────────────────────────────────────────────
   const addTeam = () => { setTeams(t => [...t, newTeam()]); touch(); };
   const removeTeam = id => { setTeams(t => t.filter(x => x.id !== id)); touch(); };
+
+  const selectJiraTeam = (appTeamId, jiraTeam) => {
+    setTeams(t => t.map(x => x.id === appTeamId
+      ? { ...x, name: jiraTeam.name, teamJiraId: jiraTeam.id || null }
+      : x));
+    touch();
+  };
+
   const updateTeam = (id, key, raw) => {
     let val;
     if (key === 'name') val = raw;
@@ -94,14 +140,13 @@ export default function ConfigTab({ data, onRefresh }) {
       <div className="section">
         <div className="section-heading">Teams</div>
         <p className="field-hint mb-16">
-          Add each delivery team. <strong>Release capacity</strong> = Sprint cap × Sprints per release.
-          Teams with no ideas assigned yet should be added here before planning starts.
+          Teams are loaded from the Select field configured as <strong>Team Field</strong> in the Jira Config tab. Add your team names as options on that field in Jira, then they will appear here.
         </p>
 
         <table className="teams-table">
           <thead>
             <tr>
-              <th>Team name</th>
+              <th>Team</th>
               <th>Jira board</th>
               <th className="num">Sprint weeks</th>
               <th className="num">Sprint cap (pts)</th>
@@ -119,12 +164,18 @@ export default function ConfigTab({ data, onRefresh }) {
             {teams.map(team => (
               <tr key={team.id}>
                 <td>
-                  <input
-                    className="config-input"
-                    value={team.name}
-                    onChange={e => updateTeam(team.id, 'name', e.target.value)}
-                    placeholder="e.g. Apollo"
-                  />
+                  {team.name ? (
+                    // Saved team — name is readonly
+                    <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>{team.name}</span>
+                  ) : (
+                    // New team — must select from configured Jira field options
+                    <TeamSelect
+                      options={teamOptions}
+                      optionsLoading={teamOptionsLoading}
+                      optionsError={teamOptionsError}
+                      onSelect={opt => selectJiraTeam(team.id, opt)}
+                    />
+                  )}
                 </td>
                 <td>
                   {boardsLoaded ? (

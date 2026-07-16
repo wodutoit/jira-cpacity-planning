@@ -5,6 +5,7 @@ modules:
       resolver:
         function: resolver
       title: Release Capacity Planning
+      icon: resource:main;icons/icon.png
       pages:
         - title: Intake
           route: intake

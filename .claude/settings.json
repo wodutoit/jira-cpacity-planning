@@ -7,10 +7,13 @@
       "Bash(forge lint *)",
       "Bash(forge deploy *)",
       "Read(//c/Users/wdutoit/.claude/projects/c--Dev-github-projects-jira-cpacity-planning/memory/**)",
-      "Bash(forge logs *)"
+      "Bash(forge logs *)",
+      "Read(//c/Users/wdutoit/AppData/Local/Temp/**)",
+      "Bash(cp \"C:/Users/wdutoit/AppData/Local/Temp/rcp-icon.png\" \"c:/Dev/github_projects/jira-cpacity-planning/static/capacity-waterline/public/icons/icon.png\" *)"
     ],
     "additionalDirectories": [
-      "c:\\Dev\\github_projects\\jira-cpacity-planning\\.claude"
+      "c:\\Dev\\github_projects\\jira-cpacity-planning\\.claude",
+      "C:\\Users\\wdutoit\\AppData\\Local\\Temp"
     ]
   },
   "hooks": {

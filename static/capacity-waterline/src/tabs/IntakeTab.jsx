@@ -97,6 +97,8 @@ export default function IntakeTab({ data }) {
   const reverseStatus = Object.fromEntries(Object.entries(statusMap).map(([lc, js]) => [js, lc]));
 
   const [localIdeas, setLocalIdeas] = useState(allIdeas);
+  const [jiraWriteError, setJiraWriteError] = useState(null);
+  const [confirmDeleteKey, setConfirmDeleteKey] = useState(null);
 
   // Chip filters — version and team use IDs, status uses lifecycle names
   const [versionChips, setVersionChips] = useState([]);   // empty = All
@@ -144,31 +146,40 @@ export default function IntakeTab({ data }) {
   const handleSize = useCallback(async (key, sizeLabel) => {
     const pts = sizeLabel ? sizeToPoints(sizeLabel) : null;
     updateLocal(key, { size: pts });
-    await invoke('updateIdeaSize', { issueKey: key, points: pts }).catch(console.error);
+    await withSaving(() => invoke('updateIdeaSize', { issueKey: key, points: pts })).catch(console.error);
   }, [scale]);
 
   const handleTeam = useCallback(async (key, teamId) => {
     updateLocal(key, { team: teamId || null });
-    await invoke('updateIdeaTeam', { issueKey: key, teamId: teamId || null }).catch(console.error);
+    setJiraWriteError(null);
+    try {
+      const res = await withSaving(() => invoke('updateIdeaTeam', { issueKey: key, teamId: teamId || null }));
+      if (res && !res.jiraUpdated && res.jiraError) {
+        setJiraWriteError(res.jiraError);
+      }
+    } catch (e) {
+      setJiraWriteError(String(e.message || e));
+    }
   }, []);
 
   const handleVersion = useCallback(async (key, versionId) => {
     updateLocal(key, { release: versionId || null });
-    await invoke('updateIdeaRelease', { issueKey: key, versionId: versionId || null }).catch(console.error);
+    await withSaving(() => invoke('updateIdeaRelease', { issueKey: key, versionId: versionId || null })).catch(console.error);
   }, []);
 
   const handleStatus = useCallback(async (key, lifecycle) => {
     const idea = localIdeas.find(i => i.key === key);
     const score = idea ? rice(idea.reach, idea.impact, idea.effort, idea.confidence) : 0;
-    if (lifecycle === 'Backlog' && !(score > 0)) return; // guard — enforced by disabled attr too
+    if (lifecycle === 'Backlog' && !(score > 0)) return;
     const jiraStatus = statusMap[lifecycle] ?? lifecycle;
     updateLocal(key, { status: jiraStatus });
-    await invoke('transitionIdea', { issueKey: key, targetStatus: lifecycle }).catch(console.error);
+    await withSaving(() => invoke('transitionIdea', { issueKey: key, targetStatus: lifecycle })).catch(console.error);
   }, [localIdeas, statusMap]);
 
   const handleDelete = useCallback(async (key) => {
+    setConfirmDeleteKey(null);
     setLocalIdeas(prev => prev.filter(i => i.key !== key));
-    await invoke('deleteIdea', { issueKey: key }).catch(console.error);
+    await withSaving(() => invoke('deleteIdea', { issueKey: key })).catch(console.error);
   }, []);
 
   const handleAdd = async () => {
@@ -234,8 +245,38 @@ export default function IntakeTab({ data }) {
   const teamSelectOpts = teams.map(t => ({ value: t.id, label: t.name }));
   const versionSelectOpts = versions.map(v => ({ value: v.id, label: v.name }));
 
+  const confirmDeleteIdea = confirmDeleteKey ? localIdeas.find(i => i.key === confirmDeleteKey) : null;
+
   return (
     <div>
+      {confirmDeleteIdea && (
+        <div onClick={() => setConfirmDeleteKey(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(9,30,66,0.42)', zIndex: 110, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div onClick={e => e.stopPropagation()}
+            style={{ background: 'var(--surface)', borderRadius: 8, boxShadow: '0 12px 40px rgba(0,0,0,.3)', width: 420, maxWidth: '100%', padding: 24 }}>
+            <div style={{ fontSize: 18, fontWeight: 800, color: 'var(--text)', marginBottom: 8 }}>Delete idea?</div>
+            <div style={{ fontSize: 14, color: 'var(--text-subtle)', marginBottom: 24 }}>
+              <strong>{confirmDeleteIdea.title}</strong> ({confirmDeleteKey}) will be permanently deleted from Jira. This cannot be undone.
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button onClick={() => setConfirmDeleteKey(null)}
+                style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '8px 16px', fontSize: 14, fontWeight: 600, color: 'var(--text-subtle)', cursor: 'pointer', fontFamily: 'inherit' }}>
+                Cancel
+              </button>
+              <button onClick={() => handleDelete(confirmDeleteKey)}
+                style={{ background: 'var(--over)', border: 'none', borderRadius: 4, padding: '8px 16px', fontSize: 14, fontWeight: 600, color: '#fff', cursor: 'pointer', fontFamily: 'inherit' }}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {jiraWriteError && (
+        <div style={{ marginBottom: 12, padding: '10px 14px', background: 'var(--over-bg)', border: '1px solid var(--over-border)', borderRadius: 6, fontSize: 13, color: 'var(--over-text)', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+          <span><strong>Jira team field not updated:</strong> {jiraWriteError}</span>
+          <button onClick={() => setJiraWriteError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--over-text)', fontWeight: 700, padding: 0, fontSize: 15, lineHeight: 1 }}>×</button>
+        </div>
+      )}
       {/* ── Header counts ── */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <div className="card" style={{ padding: '8px 16px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
@@ -397,7 +438,7 @@ export default function IntakeTab({ data }) {
                   </td>
                   <td>
                     <button className="remove-btn" title="Delete idea"
-                      onClick={() => handleDelete(idea.key)}>×</button>
+                      onClick={() => setConfirmDeleteKey(idea.key)}>×</button>
                   </td>
                 </tr>
               );

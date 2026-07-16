@@ -32,7 +32,7 @@ export default function JiraTab({ data, onRefresh }) {
   const [releaseSpaceFieldsFor, setReleaseSpaceFieldsFor] = useState(undefined);
   const [loadingReleaseSpaceFields, setLoadingReleaseSpaceFields] = useState(false);
   const [form, setForm] = useState(() => ({
-    ideaSpace: '', projectType: '', releaseSpace: '', releaseSpaceField: 'fixVersions', releaseField: '', sizeField: '',
+    ideaSpace: '', projectType: '', releaseSpace: '', releaseSpaceField: 'fixVersions', releaseField: '', teamField: 'customfield_10001', sizeField: '',
     reachField: '', impactField: '', effortField: '', confidenceField: '',
     statusMap: { ...DEFAULT_STATUS_MAP },
     ...(data?.config?.jiraCfg ?? {}),
@@ -255,7 +255,28 @@ export default function JiraTab({ data, onRefresh }) {
 
           <hr className="divider" />
 
-          {/* SECTION 3 — Size Field */}
+          {/* SECTION 3 — Team Field */}
+          <div className="section">
+            <div className="section-heading">Team Field</div>
+            <div className="instr">
+              The field on Idea issues that stores which team owns the idea. Defaults to <code>customfield_10001</code> — Jira's built-in Atlas Team picker. Only change this if your project uses a different field for team assignment.
+            </div>
+            <div className="field-group">
+              <label className="field-label">Team field</label>
+              <Select
+                options={ideaFieldOpts}
+                value={findOpt(ideaFieldOpts, form.teamField)}
+                onChange={opt => set('teamField', opt?.value ?? 'customfield_10001')}
+                placeholder="customfield_10001 (default)"
+                isClearable
+              />
+              <div className="field-hint">When a team is assigned to an idea, the app writes the real Atlassian team ID to this field in Jira.</div>
+            </div>
+          </div>
+
+          <hr className="divider" />
+
+          {/* SECTION 4 — T-shirt Size Field */}
           <div className="section">
             <div className="section-heading">T-shirt Size Field</div>
             <div className="instr">

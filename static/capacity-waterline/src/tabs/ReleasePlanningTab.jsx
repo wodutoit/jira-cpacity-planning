@@ -124,22 +124,15 @@ export default function ReleasePlanningTab({ data }) {
     withSaving(() => invoke('updateIdeaRice', { issueKey, ...vals })).catch(console.error);
   }, []);
 
-  // Plan-visible ideas: scored + not New status
-  const jiraNew = jiraCfg.statusMap?.New ?? 'New';
-  const planIdeas = localIdeas.filter(i => {
-    const score = rice(i);
-    return score != null && score > 0 && i.status !== jiraNew;
-  });
-
   const unassignedCount = localIdeas.filter(i => !i.release).length;
   const unsizedCount    = localIdeas.filter(i => i.release === versionId && i.size == null).length;
 
   const selectedVersion = versions.find(v => v.id === versionId);
   const versionOpts     = versions.map(v => ({ value: v.id, label: v.name }));
 
-  // Display states
+  // Display states — showBoard if ANY idea (scored or not) is tagged to this version
   const showNone  = !versionId;
-  const showEmpty = versionId && planIdeas.filter(i => i.release === versionId).length === 0;
+  const showEmpty = versionId && localIdeas.filter(i => i.release === versionId).length === 0;
   const showBoard = versionId && !showEmpty;
 
   const VERSION_PICKER = (onChange) => (

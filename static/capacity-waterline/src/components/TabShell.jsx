@@ -55,6 +55,9 @@ export default function TabShell({ initialData, onRefresh, refreshing, history }
     setActiveTab(id);
     const route = ALL_TABS.find(t => t.id === id)?.route;
     if (route && history?.push) history.push('/' + route);
+    // Refresh data on every tab switch so changes made in one tab are immediately
+    // visible in another without requiring a manual Refresh click.
+    onRefresh?.();
   };
 
   const visibleIds = new Set(tabs.map(t => t.id));

@@ -18,7 +18,7 @@ const resolver = new Resolver();
 const JIRA_FIELDS = [
   'summary', 'status', 'issuetype', 'project', 'assignee',
   'fixVersions', 'labels',
-  'customfield_10001', // Team
+  'customfield_10001', // Team (Atlas team picker default)
   'customfield_10053', // Impact
   'customfield_10056', // Reach
   'customfield_10064', // Effort
@@ -43,6 +43,9 @@ const JIRA_FIELDS = [
 //                                //   both to a JPD "Target Release" select field AND to a
 //                                //   real Version Picker custom field on a software idea
 //                                //   space (see extractRelease/getFieldSchema/resolveVersionName).
+//   teamField: string,           // field key on the IDEA that stores its team assignment.
+//                                //   Defaults to "customfield_10001" (Atlas Team picker).
+//                                //   Written when a team is assigned via updateIdeaTeam.
 //   sizeField: string | null,    // field key for T-shirt size (user-added number field)
 //   statusMap: object,           // { New, Backlog, ToDo, Doing, Done } → Jira status names
 //   reachField: string,          // default: customfield_10056 (JPD native) or user-added
@@ -71,13 +74,20 @@ function extractRelease(fields, releaseField, versionsByName, versionIds) {
   return rawId ?? rawName ?? null;
 }
 
-async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}, ideaOrder = [], versions = []) {
+async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}, ideaOrder = [], versions = [], teams = []) {
   if (!jiraCfg?.ideaSpace) return [];
   const versionsByName = new Map(versions.map(v => [v.name, v.id]));
   const versionIds = new Set(versions.map(v => v.id));
 
+  const teamField = jiraCfg.teamField || 'customfield_10001';
+  // Jira team field → app team id lookups. Support both:
+  // - ID match (Atlas team picker): jiraIdToAppId
+  // - Name match (Select field): teamNameToAppId — for Select fields the value is {value: "Team Name"}
+  const jiraIdToAppId = new Map(teams.filter(t => t.teamJiraId).map(t => [t.teamJiraId, t.id]));
+  const teamNameToAppId = new Map(teams.map(t => [t.name.toLowerCase(), t.id]));
+
   const { sizeField, releaseField, reachField, impactField, effortField, confidenceField } = jiraCfg;
-  const extraFields = [sizeField, releaseField, reachField, impactField, effortField, confidenceField]
+  const extraFields = [sizeField, releaseField, reachField, impactField, effortField, confidenceField, teamField]
     .filter(Boolean)
     .filter(f => !JIRA_FIELDS.includes(f));
   const fields = [...JIRA_FIELDS, ...extraFields];
@@ -107,9 +117,28 @@ async function fetchIdeas(jiraCfg, ideaTeams = {}, ideaSizes = {}, ideaOrder = [
     key: i.key,
     title: i.fields.summary,
     status: i.fields.status?.name ?? null,
-    // App-stored overrides take precedence over Jira field values
-    team: ideaTeams[i.key] ?? (i.fields.customfield_10001?.id ?? null),
-    teamName: ideaTeams[i.key] ? null : (i.fields.customfield_10001?.name ?? null),
+    // Jira is the source of truth for team assignment.
+    // raw === null  → field exists, explicitly empty → no team (don't fall back to stale KVS)
+    // raw === undefined → field wasn't in the response → fall back to KVS only in this case
+    // raw === object → extract team from field value
+    team: (() => {
+      const raw = i.fields[teamField];
+      if (raw === undefined) return ideaTeams[i.key] ?? null; // field not fetched — KVS fallback
+      if (!raw) return null; // field empty — explicitly no team, ignore any stale KVS entry
+      // Select field: {value: "Team Name", id: "option-id"} — match by value/name
+      if (raw.value != null) return teamNameToAppId.get(String(raw.value).toLowerCase()) ?? null;
+      // Atlas team picker / other: match by ID then name
+      const id = raw?.id ?? raw?.teamId;
+      if (id) { const byId = jiraIdToAppId.get(id); if (byId) return byId; }
+      const name = raw?.displayName ?? raw?.name;
+      if (name) { const byName = teamNameToAppId.get(name.toLowerCase()); if (byName) return byName; }
+      return null;
+    })(),
+    teamName: (() => {
+      const raw = i.fields[teamField];
+      if (raw) return raw?.value ?? raw?.displayName ?? raw?.name ?? null;
+      return null;
+    })(),
     size: ideaSizes[i.key] !== undefined ? ideaSizes[i.key] : (sizeField ? (i.fields[sizeField] ?? null) : null),
     release: extractRelease(i.fields, releaseField, versionsByName, versionIds),
     reach: i.fields[reachField ?? 'customfield_10056'] ?? null,
@@ -198,7 +227,7 @@ resolver.define('getAll', async ({ payload }) => {
   // list to resolve idea-side release-field values (which may be names, not ids) to
   // real version ids.
   const versions = await fetchVersions(config.jiraCfg);
-  const ideas = await fetchIdeas(config.jiraCfg, ideaTeams ?? {}, ideaSizes ?? {}, ideaOrder ?? [], versions);
+  const ideas = await fetchIdeas(config.jiraCfg, ideaTeams ?? {}, ideaSizes ?? {}, ideaOrder ?? [], versions, config.teams ?? []);
 
   return { ideas, teams: config.teams ?? [], versions, release, config, currentUser };
 });
@@ -347,19 +376,115 @@ resolver.define('getProjectFields', async ({ payload }) => {
   return { fields: [...fieldsByKey.values()] };
 });
 
-// Assign a team to an idea — stored in Forge Storage (not Jira's team field).
-// Jira's customfield_10001 requires real Atlassian team UUIDs; our config teams
-// use app-generated IDs, so we own team assignment here and overlay on getAll.
+// Assign a team to an idea — stored in Forge Storage AND written to Jira's team field.
+// Assign a team to an idea — updates both app storage and Jira's team field.
+// If the team has no teamJiraId cached, we search existing ideas for a matching team
+// name and extract the ID on the fly, then cache it for future writes.
 resolver.define('updateIdeaTeam', async ({ payload }) => {
   const { issueKey, teamId } = payload;
+
+  // Always update app storage first — the planning UI is authoritative regardless.
   const existing = (await kvs.get('ideaTeams')) ?? {};
-  if (teamId) {
-    existing[issueKey] = teamId;
-  } else {
-    delete existing[issueKey];
-  }
+  if (teamId) { existing[issueKey] = teamId; }
+  else { delete existing[issueKey]; }
   await kvs.set('ideaTeams', existing);
-  return { ok: true };
+
+  const configRecord = await kvs.get('config');
+  const teamField = configRecord?.jiraCfg?.teamField || 'customfield_10001';
+  const ideaSpace = configRecord?.jiraCfg?.ideaSpace;
+  const teams = configRecord?.teams ?? [];
+  const team = teams.find(t => t.id === teamId);
+
+  // Clearing the team
+  if (!teamId) {
+    try {
+      const res = await asUser().requestJira(route`/rest/api/3/issue/${issueKey}`, {
+        method: 'PUT',
+        headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: { [teamField]: null } }),
+      });
+      return { ok: true, jiraUpdated: res.ok };
+    } catch (e) {
+      return { ok: true, jiraUpdated: false, jiraError: e.message };
+    }
+  }
+
+  let teamJiraId = team?.teamJiraId ?? null;
+
+  // If no cached teamJiraId, search existing ideas for a team with a matching name
+  // and extract the real ID from the Jira field — cache it on the team for next time.
+  if (!teamJiraId && team?.name && ideaSpace) {
+    try {
+      const jqlRaw = `project = "${ideaSpace}" AND issuetype = Idea`;
+      const jql = encodeURIComponent(jqlRaw);
+      const res = await asUser().requestJira(
+        route`/rest/api/3/search?jql=${jql}&maxResults=200&fields=${teamField}`,
+        { headers: { Accept: 'application/json' } }
+      );
+      if (res.ok) {
+        const body = await res.json();
+        outer: for (const issue of body.issues ?? []) {
+          const raw = issue.fields?.[teamField];
+          const vals = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+          for (const val of vals) {
+            const id = val?.teamId ?? val?.id;
+            const name = val?.displayName ?? val?.name;
+            if (id && name && name.toLowerCase() === team.name.toLowerCase()) {
+              teamJiraId = id;
+              // Cache on the team config so future writes skip this search.
+              const updatedTeams = teams.map(t => t.id === teamId ? { ...t, teamJiraId: id } : t);
+              await kvs.set('config', { ...configRecord, teams: updatedTeams });
+              break outer;
+            }
+          }
+        }
+      }
+    } catch { /* best effort */ }
+  }
+
+  // Determine write value from field schema:
+  // - Select (option): write {value: teamName} — always works, no ID needed.
+  // - Array of options: write [{value: teamName}].
+  // - Team picker: requires the canonical Atlas team ID from the Teams API, which Forge
+  //   blocks. Falls back to ID attempt if available; advise using a Select field instead.
+  // - Unknown/string: write name as string.
+  let fieldValue;
+  const schema = await getFieldSchema(teamField).catch(() => null);
+  const schemaType = schema?.type;
+  const schemaItems = schema?.items;
+
+  if (schemaType === 'option') {
+    fieldValue = { value: team?.name ?? teamId };
+  } else if (schemaType === 'array' && schemaItems === 'option') {
+    fieldValue = [{ value: team?.name ?? teamId }];
+  } else if (schemaType === 'string') {
+    fieldValue = team?.name ?? teamId;
+  } else if (teamJiraId) {
+    // Atlas Team picker or unknown — attempt by ID (fails if it's the Atlas picker without
+    // a proper Atlas team UUID; see jiraError for details and suggested fix).
+    const ari = teamJiraId.startsWith('ari:') ? teamJiraId : `ari:cloud:identity::team/${teamJiraId}`;
+    fieldValue = { id: ari };
+  } else {
+    return {
+      ok: true, jiraUpdated: false,
+      jiraError: `Cannot write to field "${teamField}" (type: ${schemaType ?? 'unknown'}). The Atlas Team picker requires an Atlas team ID that Forge cannot retrieve. Switch the Team Field in Jira Config to a Select List custom field with team names as options.`,
+    };
+  }
+
+  try {
+    const res = await asUser().requestJira(route`/rest/api/3/issue/${issueKey}`, {
+      method: 'PUT',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: { [teamField]: fieldValue } }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: true, jiraUpdated: false, jiraError: `Jira returned ${res.status}: ${text.slice(0, 200)}` };
+    }
+    return { ok: true, jiraUpdated: true };
+  } catch (e) {
+    return { ok: true, jiraUpdated: false, jiraError: e.message };
+  }
 });
 
 // Tag an idea to a release version — async, no save button
@@ -610,6 +735,38 @@ resolver.define('getBoards', async () => {
   }
 });
 
+// Search for Jira Atlas teams — used by the Config tab's team picker.
+// Strategy:
+// 1. Public Teams API: GET /gateway/api/public/teams/v1/org/{orgId}/teams?size=300
+//    The orgId is retrieved via /rest/api/3/serverInfo (cloudId). Response has
+//    entities[].{teamId, displayName}.
+// Returns the allowed values (options) for the configured team Select field.
+// These are the values users can pick when adding teams in the Config tab.
+// Reads from the Idea issue type's field metadata — the same source used by getProjectDetails.
+resolver.define('getJiraTeams', async () => {
+  const configRecord = await kvs.get('config');
+  const ideaSpace = configRecord?.jiraCfg?.ideaSpace;
+  const teamField = configRecord?.jiraCfg?.teamField || 'customfield_10001';
+  if (!ideaSpace) return { teams: [], error: 'No Idea Space configured in Jira Config.' };
+  try {
+    const metaRes = await asUser().requestJira(
+      route`/rest/api/3/issue/createmeta?projectKeys=${ideaSpace}&issuetypeNames=Idea&expand=projects.issuetypes.fields`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (!metaRes.ok) return { teams: [], error: `Could not load field metadata (${metaRes.status}).` };
+    const meta = await metaRes.json();
+    const ideaType = (meta.projects?.[0]?.issuetypes ?? []).find(t => t.name === 'Idea');
+    const field = ideaType?.fields?.[teamField];
+    if (!field) return { teams: [], error: `Field "${teamField}" not found on the Idea issue type.` };
+    const allowedValues = field.allowedValues ?? [];
+    if (!allowedValues.length) return { teams: [], error: `Field "${teamField}" has no configured options. Add team names as options in Jira's field configuration, then retry.` };
+    const teams = allowedValues.map(v => ({ id: v.id, name: v.value ?? v.name }));
+    return { teams };
+  } catch (e) {
+    return { teams: [], error: String(e.message || e) };
+  }
+});
+
 // Load delivery planning data: sprints are ALWAYS fetched live from Jira — we never
 // cache sprint objects in app storage, only the selection (team -> [sprintId]) and
 // per-sprint capacity overrides (team:sprintId -> {pts, note}). Sprints in `selection`
@@ -684,6 +841,24 @@ resolver.define('saveDelivery', async ({ payload }) => {
   const existing = (await kvs.get(`delivery:${versionId}`)) ?? {};
   await kvs.set(`delivery:${versionId}`, { ...existing, selection, overrides });
   return { ok: true };
+});
+
+// Returns a map of sprintId → versionId for all sprints allocated across ALL versions.
+// Used to mark sprints in the sprint picker as readonly when they belong to another release.
+resolver.define('getSprintAllocations', async ({ payload }) => {
+  const { versionIds = [], currentVersionId } = payload;
+  const allocations = {}; // sprintId → versionId
+  await Promise.all(versionIds.map(async vId => {
+    if (vId === currentVersionId) return; // skip the current version
+    const data = await kvs.get(`delivery:${vId}`);
+    if (!data?.selection) return;
+    for (const sprintIds of Object.values(data.selection)) {
+      for (const sid of (sprintIds || [])) {
+        if (!allocations[sid]) allocations[sid] = vId;
+      }
+    }
+  }));
+  return { allocations };
 });
 
 // Edit a sprint's name/goal/dates via the Agile API (write:sprint:jira-software scope).
