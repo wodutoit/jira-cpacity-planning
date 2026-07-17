@@ -1,6 +1,6 @@
 const Resolver = require('@forge/resolver').default;
 const { kvs } = require('@forge/kvs');
-const { route, asUser } = require('@forge/api');
+const { route, asUser, asApp, webTrigger } = require('@forge/api');
 
 const resolver = new Resolver();
 
@@ -1298,4 +1298,184 @@ resolver.define('moveWaterlineItem', async ({ payload }) => {
   return { ok: true, moved: 'project', status };
 });
 
+// Returns the web trigger URL for the EazyBI export endpoint.
+resolver.define('getWebTriggerUrl', async () => {
+  const url = await webTrigger.getUrl('easybi-export');
+  return { url };
+});
+
+// Save the API token used to authenticate the EazyBI export web trigger.
+resolver.define('saveApiToken', async ({ payload }) => {
+  const { apiToken } = payload;
+  const config = (await kvs.get('config')) ?? {};
+  await kvs.set('config', { ...config, apiToken });
+  return { ok: true };
+});
+
+// Sum ALL story points currently in a sprint (committed scope, regardless of status).
+resolver.define('getSprintCommitted', async ({ payload }) => {
+  const { sprintId } = payload;
+  const config = (await kvs.get('config')) ?? {};
+  const sizeField = config.jiraCfg?.sizeField;
+  const fieldsParam = [sizeField, 'customfield_10016'].filter(Boolean).join(',');
+
+  let committed = 0;
+  let startAt = 0;
+
+  for (;;) {
+    const res = await asUser().requestJira(
+      route`/rest/agile/1.0/sprint/${sprintId}/issue?fields=${fieldsParam}&maxResults=100&startAt=${startAt}`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (!res.ok) return { ok: false, error: `Jira returned ${res.status}` };
+    const data = await res.json();
+    const issues = data.issues || [];
+    for (const issue of issues) {
+      const pts = (sizeField && issue.fields[sizeField] != null)
+        ? issue.fields[sizeField]
+        : (issue.fields?.customfield_10016 ?? 0);
+      committed += typeof pts === 'number' ? pts : 0;
+    }
+    startAt += issues.length;
+    if (!issues.length || startAt >= (data.total ?? 0)) break;
+  }
+  return { ok: true, committed: Math.round(committed) };
+});
+
+// Sum completed (Done status category) story points for a closed sprint — velocity capture.
+resolver.define('getSprintVelocity', async ({ payload }) => {
+  const { sprintId } = payload;
+  const config = (await kvs.get('config')) ?? {};
+  const sizeField = config.jiraCfg?.sizeField;
+  const fieldsParam = [sizeField, 'customfield_10016', 'status'].filter(Boolean).join(',');
+
+  let velocity = 0;
+  let startAt = 0;
+
+  for (;;) {
+    const res = await asUser().requestJira(
+      route`/rest/agile/1.0/sprint/${sprintId}/issue?fields=${fieldsParam}&maxResults=100&startAt=${startAt}`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (!res.ok) return { ok: false, error: `Jira returned ${res.status}` };
+    const data = await res.json();
+    const issues = data.issues || [];
+    for (const issue of issues) {
+      if (issue.fields?.status?.statusCategory?.key === 'done') {
+        const pts = (sizeField && issue.fields[sizeField] != null)
+          ? issue.fields[sizeField]
+          : (issue.fields?.customfield_10016 ?? 0);
+        velocity += typeof pts === 'number' ? pts : 0;
+      }
+    }
+    startAt += issues.length;
+    if (!issues.length || startAt >= (data.total ?? 0)) break;
+  }
+  return { ok: true, velocity: Math.round(velocity) };
+});
+
+// ── EazyBI / REST export web trigger ──────────────────────────────────────────
+// Returns a flat JSON array of all sprint-capacity records across every version.
+// Secured by a Bearer token stored in the app config. Configure in Jira Config → API Access.
+const easybiExportFn = async (req) => {
+  const respond = (status, body) => ({
+    statusCode: status,
+    headers: { 'Content-Type': ['application/json'] },
+    body: JSON.stringify(body),
+  });
+
+  try {
+    const config = (await kvs.get('config')) ?? {};
+    const apiToken = config.apiToken;
+
+    if (!apiToken) {
+      return respond(401, { error: 'No API token configured. Set one in the app\'s Jira Config tab → API Access.' });
+    }
+
+    const authHeader = ([].concat(req.headers?.authorization ?? req.headers?.Authorization ?? []))[0] ?? '';
+    const queryToken = ([].concat(req.queryParameters?.token ?? []))[0] ?? '';
+    const provided = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : queryToken;
+
+    if (!provided || provided !== apiToken) {
+      return respond(401, { error: 'Invalid or missing API token. Pass it as: Authorization: Bearer <token>' });
+    }
+
+    const teams = config.teams ?? [];
+    const jiraCfg = config.jiraCfg ?? {};
+    const projectKey = jiraCfg.releaseSpace || jiraCfg.ideaSpace;
+
+    if (!projectKey) {
+      return respond(400, { error: 'No Jira project configured. Complete Jira Config in the app first.' });
+    }
+
+    // All versions from the configured project
+    const vRes = await asApp().requestJira(
+      route`/rest/api/3/project/${projectKey}/versions`,
+      { headers: { Accept: 'application/json' } }
+    );
+    const versions = vRes.ok ? await vRes.json() : [];
+
+    // Sprint details keyed by sprint ID across all team boards
+    const sprintDetails = {};
+    for (const team of teams) {
+      if (!team.boardId) continue;
+      let startAt = 0;
+      for (;;) {
+        const sRes = await asApp().requestJira(
+          route`/rest/agile/1.0/board/${team.boardId}/sprint?maxResults=100&startAt=${startAt}&state=active,future,closed`,
+          { headers: { Accept: 'application/json' } }
+        );
+        if (!sRes.ok) break;
+        const sData = await sRes.json();
+        const sprints = sData.values ?? [];
+        sprints.forEach(sp => { sprintDetails[sp.id] = sp; });
+        startAt += sprints.length;
+        if (!sprints.length || sData.isLast) break;
+      }
+    }
+
+    // Build one record per version × team × selected sprint
+    const records = [];
+    for (const version of versions) {
+      const delivery = (await kvs.get(`delivery:${version.id}`)) ?? {};
+      const selection = delivery.selection ?? {};
+      const overrides = delivery.overrides ?? {};
+
+      for (const team of teams) {
+        for (const sprintId of (selection[team.id] ?? [])) {
+          const sp = sprintDetails[sprintId];
+          const ov = overrides[`${team.id}:${sprintId}`] ?? {};
+          records.push({
+            versionId: version.id,
+            versionName: version.name,
+            releaseDate: version.releaseDate ?? null,
+            versionReleased: version.released ?? false,
+            versionArchived: version.archived ?? false,
+            teamId: team.id,
+            teamName: team.name,
+            sprintId,
+            sprintName: sp?.name ?? String(sprintId),
+            sprintState: sp?.state ?? 'unknown',
+            sprintStartDate: sp?.startDate ? sp.startDate.slice(0, 10) : null,
+            sprintEndDate: sp?.endDate ? sp.endDate.slice(0, 10) : null,
+            baseCapacity: team.sprintCap ?? 0,
+            capacity: ov.pts != null ? ov.pts : (team.sprintCap ?? 0),
+            committed: ov.committed ?? null,
+            velocity: ov.velocity ?? null,
+          });
+        }
+      }
+    }
+
+    return respond(200, {
+      generatedAt: new Date().toISOString(),
+      recordCount: records.length,
+      records,
+    });
+  } catch (err) {
+    return respond(500, { error: String(err.message || err) });
+  }
+};
+
+exports.easybiExport = easybiExportFn;
 exports.handler = resolver.getDefinitions();
