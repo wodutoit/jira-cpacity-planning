@@ -3,21 +3,27 @@ import ReactDOM from 'react-dom/client';
 import { view } from '@forge/bridge';
 import './styles.css';
 import App from './App';
-import GadgetView from './gadget/GadgetView';
-import GadgetEdit from './gadget/GadgetEdit';
+import ReleasePlanningGadgetView from './gadget/ReleasePlanningGadgetView';
+import ReleasePlanningGadgetEdit from './gadget/ReleasePlanningGadgetEdit';
+import ReleaseProgressGadgetView from './gadget/ReleaseProgressGadgetView';
+import ReleaseProgressGadgetEdit from './gadget/ReleaseProgressGadgetEdit';
 
-// All modules (the globalPage app + the dashboard gadget's view/edit) share this
-// one static bundle — cheaper than a second Vite build. Branch on context instead.
-const GADGET_MODULE_KEY = 'release-team-gadget';
+// All modules (the globalPage app + each dashboard gadget's view/edit) share this
+// one static bundle — cheaper than a separate Vite build per gadget. Branch on
+// context instead. Add new gadgets' manifest keys here as they're built.
+const GADGETS = {
+  'release-team-gadget': { view: ReleasePlanningGadgetView, edit: ReleasePlanningGadgetEdit },
+  'release-progress-gadget': { view: ReleaseProgressGadgetView, edit: ReleaseProgressGadgetEdit },
+};
 
 async function bootstrap() {
   const root = ReactDOM.createRoot(document.getElementById('root'));
   const ctx = await view.getContext().catch(() => ({}));
 
-  let Component = App;
-  if (ctx.moduleKey === GADGET_MODULE_KEY) {
-    Component = ctx.extension?.entryPoint === 'edit' ? GadgetEdit : GadgetView;
-  }
+  const gadget = GADGETS[ctx.moduleKey];
+  const Component = gadget
+    ? (ctx.extension?.entryPoint === 'edit' ? gadget.edit : gadget.view)
+    : App;
 
   root.render(
     <React.StrictMode>

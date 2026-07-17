@@ -1307,6 +1307,87 @@ resolver.define('getGadgetVersions', async () => {
   return { versions, teams: config.teams ?? [] };
 });
 
+// Actual progress per team for the Release Progress gadget: sums only Done-status
+// items in each team's sprints mapped to this release (delivery.selection), using
+// the same epic/child rule as getWaterline — an epic with fetched children never
+// contributes its own estimate, only its children's (and only when they're Done).
+// Also reports whether any mapped sprint has started, and the earliest start date
+// among them, so the frontend can compute the release's time-prorated expected %.
+resolver.define('getReleaseProgress', async ({ payload }) => {
+  const { versionId } = payload;
+  const config = (await kvs.get('config')) ?? {};
+  const teams = config.teams ?? [];
+  const jiraCfg = config.jiraCfg ?? {};
+  const sizeFields = [jiraCfg.sizeField, 'customfield_10016'].filter(Boolean);
+
+  const delivery = (await kvs.get(`delivery:${versionId}`)) ?? { selection: {} };
+  const selection = delivery.selection || {};
+
+  const fieldsParam = ['issuetype', 'status', 'parent', ...sizeFields].join(',');
+  const itemsByKey = {};
+  const teamOfKey = {};
+  let earliestStart = null;
+  let hasStartedSprint = false;
+
+  for (const team of teams) {
+    for (const sprintId of (selection[team.id] || [])) {
+      const spRes = await asUser().requestJira(route`/rest/agile/1.0/sprint/${sprintId}`, { headers: { Accept: 'application/json' } });
+      if (spRes.ok) {
+        const sp = await spRes.json();
+        if (sp.state === 'active' || sp.state === 'closed') hasStartedSprint = true;
+        if (sp.startDate && (!earliestStart || sp.startDate < earliestStart)) earliestStart = sp.startDate;
+      }
+
+      let startAt = 0;
+      for (;;) {
+        const res = await asUser().requestJira(
+          route`/rest/agile/1.0/sprint/${sprintId}/issue?fields=${fieldsParam}&maxResults=100&startAt=${startAt}`,
+          { headers: { Accept: 'application/json' } }
+        );
+        if (!res.ok) break;
+        const body = await res.json();
+        const issues = body.issues || [];
+        issues.forEach(iss => {
+          const pts = sizeFields.map(f => iss.fields[f]).find(v => v != null) ?? null;
+          itemsByKey[iss.key] = {
+            key: iss.key,
+            type: (iss.fields.issuetype?.name || '').toLowerCase(),
+            done: iss.fields.status?.statusCategory?.key === 'done',
+            parentKey: iss.fields.parent?.key || null,
+            estimate: pts,
+          };
+          teamOfKey[iss.key] = team.id;
+        });
+        startAt += issues.length;
+        if (!issues.length || startAt >= (body.total ?? 0)) break;
+      }
+    }
+  }
+
+  const childrenOf = {};
+  Object.values(itemsByKey).forEach(it => {
+    if (it.parentKey) (childrenOf[it.parentKey] = childrenOf[it.parentKey] || []).push(it.key);
+  });
+  const contribution = item => {
+    if (item.type === 'epic' && childrenOf[item.key]?.length) return 0;
+    return item.done ? (item.estimate || 0) : 0;
+  };
+
+  const actualByTeam = {};
+  teams.forEach(t => { actualByTeam[t.id] = 0; });
+  Object.entries(teamOfKey).forEach(([key, teamId]) => {
+    const item = itemsByKey[key];
+    if (!item) return;
+    actualByTeam[teamId] = (actualByTeam[teamId] ?? 0) + contribution(item);
+  });
+
+  return {
+    actualByTeam,
+    earliestSprintStart: earliestStart ? earliestStart.slice(0, 10) : null,
+    hasStartedSprint,
+  };
+});
+
 // Returns the web trigger URL for the EazyBI export endpoint.
 resolver.define('getWebTriggerUrl', async () => {
   const url = await webTrigger.getUrl('easybi-export');

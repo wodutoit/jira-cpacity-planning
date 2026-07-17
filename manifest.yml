@@ -23,6 +23,15 @@ modules:
         function: resolver
       edit:
         resource: main
+    - key: release-progress-gadget
+      title: RCP - Release Progress
+      description: Actual delivery progress per team vs planned scope and time-expected pace for a release.
+      thumbnail: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
+      resource: main
+      resolver:
+        function: resolver
+      edit:
+        resource: main
   webtrigger:
     - key: easybi-export
       function: easybiExport
