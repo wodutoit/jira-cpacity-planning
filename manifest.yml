@@ -13,9 +13,14 @@ modules:
           route: release-planning
         - title: Delivery Planning
           route: delivery-planning
+  webtrigger:
+    - key: easybi-export
+      function: easybiExport
   function:
     - key: resolver
       handler: index.handler
+    - key: easybiExport
+      handler: index.easybiExport
 
 resources:
   - key: main

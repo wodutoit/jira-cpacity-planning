@@ -43,9 +43,46 @@ export default function JiraTab({ data, onRefresh }) {
   const [savedOk, setSavedOk] = useState(false);
   const [dirty, setDirty] = useState(false);
 
+  // API Access (EazyBI export)
+  const [apiToken, setApiToken] = useState(data?.config?.apiToken ?? '');
+  const [tokenSaving, setTokenSaving] = useState(false);
+  const [tokenSaved, setTokenSaved] = useState(false);
+  const [triggerUrl, setTriggerUrl] = useState('');
+  const [loadingTriggerUrl, setLoadingTriggerUrl] = useState(true);
+  const [copied, setCopied] = useState(false);
+
   useEffect(() => {
     invoke('getJiraSetup').then(setSetup).finally(() => setLoadingSetup(false));
   }, []);
+
+  useEffect(() => {
+    invoke('getWebTriggerUrl')
+      .then(r => setTriggerUrl(r.url ?? ''))
+      .catch(() => setTriggerUrl(''))
+      .finally(() => setLoadingTriggerUrl(false));
+  }, []);
+
+  const generateToken = () => {
+    const arr = new Uint8Array(24);
+    crypto.getRandomValues(arr);
+    setApiToken(Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join(''));
+  };
+
+  const saveToken = async () => {
+    setTokenSaving(true);
+    try {
+      await invoke('saveApiToken', { apiToken });
+      setTokenSaved(true);
+      setTimeout(() => setTokenSaved(false), 2400);
+    } finally { setTokenSaving(false); }
+  };
+
+  const copyUrl = () => {
+    navigator.clipboard.writeText(triggerUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   useEffect(() => {
     if (!form.ideaSpace) { setDetails(null); return; }
@@ -137,6 +174,7 @@ export default function JiraTab({ data, onRefresh }) {
   const canSave = validation?.valid === true;
 
   return (
+  <>
     <div className="card">
       <h2 className="card-title">Jira Integration</h2>
       <p className="card-desc">
@@ -403,5 +441,63 @@ export default function JiraTab({ data, onRefresh }) {
         </>
       )}
     </div>
+
+    {/* API Access — separate card, always visible */}
+    <div className="card" style={{ marginTop: 16 }}>
+      <h2 className="card-title">API Access</h2>
+      <p className="card-desc">
+        Expose capacity planning data to external tools like <strong>EazyBI</strong> via a secure HTTP endpoint.
+        Set an API token, then configure EazyBI to import from the URL using an <code>Authorization: Bearer &lt;token&gt;</code> header.
+        The response is JSON — set the <strong>data path</strong> to <code>records</code> in EazyBI's REST source settings.
+      </p>
+
+      <div className="section">
+        <div className="section-heading">API Token</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input
+            type="text"
+            value={apiToken}
+            onChange={e => setApiToken(e.target.value)}
+            placeholder="Generate or paste a token…"
+            style={{ flex: '1 1 280px', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)', color: 'var(--text)', padding: '8px 10px', fontSize: 13, fontFamily: 'ui-monospace,monospace', outline: 'none' }}
+          />
+          <button onClick={generateToken}
+            style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '8px 14px', fontSize: 13, fontWeight: 600, color: 'var(--text-subtle)', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+            Generate
+          </button>
+          <button onClick={saveToken} disabled={tokenSaving || !apiToken}
+            style={{ background: apiToken ? 'var(--brand)' : 'var(--surface-sunken)', color: apiToken ? '#fff' : 'var(--text-subtlest)', border: apiToken ? 'none' : '1px solid var(--border)', borderRadius: 4, padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: (tokenSaving || !apiToken) ? 'default' : 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+            {tokenSaving ? 'Saving…' : 'Save token'}
+          </button>
+          {tokenSaved && <span style={{ fontSize: 13, color: 'var(--ok-text)', fontWeight: 600 }}>✓ Saved</span>}
+        </div>
+        <div className="field-hint" style={{ marginTop: 6 }}>Keep this secret — anyone with this token can read your capacity planning data.</div>
+      </div>
+
+      <hr className="divider" />
+
+      <div className="section">
+        <div className="section-heading">Data Endpoint URL</div>
+        {loadingTriggerUrl ? (
+          <div style={{ fontSize: 13, color: 'var(--text-subtlest)' }}>Loading URL…</div>
+        ) : (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              readOnly
+              value={triggerUrl}
+              style={{ flex: 1, border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface-sunken)', color: 'var(--text-subtle)', padding: '8px 10px', fontSize: 12, fontFamily: 'ui-monospace,monospace', outline: 'none' }}
+            />
+            <button onClick={copyUrl}
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '8px 14px', fontSize: 13, fontWeight: 600, color: copied ? 'var(--ok-text)' : 'var(--text-subtle)', cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+              {copied ? '✓ Copied' : 'Copy'}
+            </button>
+          </div>
+        )}
+        <div className="field-hint" style={{ marginTop: 6 }}>
+          In EazyBI: <em>Manage account → Source data → REST API</em>. Use this URL, add header <code>Authorization: Bearer &lt;your-token&gt;</code>, set data path to <code>records</code>.
+        </div>
+      </div>
+    </div>
+  </>
   );
 }

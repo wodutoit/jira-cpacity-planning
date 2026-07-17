@@ -14,7 +14,8 @@
       "Read(//c/Users/wdutoit/.claude/skills/gstack/bin/**)",
       "Bash(~/.claude/skills/gstack/bin/gstack-uninstall --force)",
       "Bash(cd \"c:/Dev/github_projects/jira-cpacity-planning/static/capacity-waterline\" && npm run build 2>&1 | tail -5 && cd ../.. && forge deploy --environment staging --no-verify 2>&1)",
-      "Read(//c/Dev/**)"
+      "Read(//c/Dev/**)",
+      "Bash(forge install *)"
     ],
     "additionalDirectories": [
       "c:\\Dev\\github_projects\\jira-cpacity-planning\\.claude",
