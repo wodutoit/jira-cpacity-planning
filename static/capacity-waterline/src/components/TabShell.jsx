@@ -44,7 +44,17 @@ export default function TabShell({ initialData, onRefresh, refreshing, history }
   const [configMode, setConfigMode] = useState(() => admin && needsSetup(initialData?.config));
   const visibleTabs = configMode ? CONFIG_TABS : NORMAL_TABS;
 
-  const [activeTab, setActiveTab] = useState(() => routeToTabId(history?.location?.pathname) || visibleTabs[0]?.id);
+  // The dashboard gadget's "Open in Release Planning" link can't deep-link to a
+  // sidebar route directly (Forge has no cross-module route API) — it hands off
+  // via localStorage instead, since gadget and globalPage share the app's origin.
+  const [activeTab, setActiveTab] = useState(() => {
+    let openTab = null;
+    try {
+      openTab = localStorage.getItem('cpw:openTab');
+      if (openTab) localStorage.removeItem('cpw:openTab');
+    } catch { /* localStorage unavailable */ }
+    return openTab || routeToTabId(history?.location?.pathname) || visibleTabs[0]?.id;
+  });
   const [savingCount, setSavingCount] = useState(0);
 
   const openConfig = () => {

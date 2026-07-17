@@ -13,6 +13,16 @@ modules:
           route: release-planning
         - title: Delivery Planning
           route: delivery-planning
+  jira:dashboardGadget:
+    - key: release-team-gadget
+      title: RCP - Release Planning
+      description: Story points planned vs team capacity for a release, with OK / Filling / Over status.
+      thumbnail: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
+      resource: main
+      resolver:
+        function: resolver
+      edit:
+        resource: main
   webtrigger:
     - key: easybi-export
       function: easybiExport

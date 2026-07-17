@@ -1298,6 +1298,15 @@ resolver.define('moveWaterlineItem', async ({ payload }) => {
   return { ok: true, moved: 'project', status };
 });
 
+// Lightweight version list for the dashboard gadget — avoids the full idea fetch
+// that getAll() does, since the gadget's edit view (and its "auto" resolution)
+// only need version metadata and team capacities, not every idea.
+resolver.define('getGadgetVersions', async () => {
+  const config = (await kvs.get('config')) ?? {};
+  const versions = await fetchVersions(config.jiraCfg);
+  return { versions, teams: config.teams ?? [] };
+});
+
 // Returns the web trigger URL for the EazyBI export endpoint.
 resolver.define('getWebTriggerUrl', async () => {
   const url = await webTrigger.getUrl('easybi-export');
