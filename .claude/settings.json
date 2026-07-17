@@ -15,7 +15,9 @@
       "Bash(~/.claude/skills/gstack/bin/gstack-uninstall --force)",
       "Bash(cd \"c:/Dev/github_projects/jira-cpacity-planning/static/capacity-waterline\" && npm run build 2>&1 | tail -5 && cd ../.. && forge deploy --environment staging --no-verify 2>&1)",
       "Read(//c/Dev/**)",
-      "Bash(forge install *)"
+      "Bash(forge install *)",
+      "WebSearch",
+      "WebFetch(domain:developer.atlassian.com)"
     ],
     "additionalDirectories": [
       "c:\\Dev\\github_projects\\jira-cpacity-planning\\.claude",

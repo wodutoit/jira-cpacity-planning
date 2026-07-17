@@ -26,12 +26,39 @@ function routeToTabId(pathname) {
   return ALL_TABS.find(t => t.route === segment)?.id;
 }
 
+const NORMAL_TABS = ALL_TABS.filter(t => !t.adminOnly);
+const CONFIG_TABS = ALL_TABS.filter(t => t.adminOnly);
+
+// App is "unconfigured" until Jira Config has a project set and at least one team exists —
+// used to force Config mode open by default on first use, instead of landing on empty tabs.
+function needsSetup(config) {
+  return !config?.jiraCfg?.ideaSpace || !(config?.teams?.length > 0);
+}
+
 export default function TabShell({ initialData, onRefresh, refreshing, history }) {
   const admin = isAdmin(initialData?.config, initialData?.currentUser?.accountId);
-  const tabs = ALL_TABS.filter(t => !t.adminOnly || admin);
 
-  const [activeTab, setActiveTab] = useState(() => routeToTabId(history?.location?.pathname) || 'intake');
+  // Config mode swaps the whole tab bar to Config + Jira (admin-only) and hides the
+  // regular Intake/Release/Delivery tabs — mirrors the "settings" pattern other Jira
+  // apps use, since Forge has no way to hook into the sidebar's native kebab menu.
+  const [configMode, setConfigMode] = useState(() => admin && needsSetup(initialData?.config));
+  const visibleTabs = configMode ? CONFIG_TABS : NORMAL_TABS;
+
+  const [activeTab, setActiveTab] = useState(() => routeToTabId(history?.location?.pathname) || visibleTabs[0]?.id);
   const [savingCount, setSavingCount] = useState(0);
+
+  const openConfig = () => {
+    if (!admin) return;
+    setConfigMode(true);
+    setActiveTab(CONFIG_TABS[0]?.id);
+    onRefresh?.();
+  };
+
+  const closeConfig = () => {
+    setConfigMode(false);
+    setActiveTab(NORMAL_TABS[0]?.id);
+    onRefresh?.();
+  };
 
   useEffect(() => {
     const handler = e => setSavingCount(c => Math.max(0, c + e.detail));
@@ -41,11 +68,16 @@ export default function TabShell({ initialData, onRefresh, refreshing, history }
 
   // Sidebar sub-item clicks only move the Forge history location — listen so the
   // in-app tab state follows along (and stays correct across browser back/forward).
+  // Only NORMAL_TABS have routes, so any match here means the user picked a sidebar
+  // item — exit Config mode if it was active so the picked tab actually becomes visible.
   useEffect(() => {
     if (!history?.listen) return;
     const unlisten = history.listen(location => {
       const id = routeToTabId(location?.pathname);
-      if (id) setActiveTab(id);
+      if (id) {
+        setConfigMode(false);
+        setActiveTab(id);
+      }
     });
     return () => unlisten?.();
   }, [history]);
@@ -60,9 +92,9 @@ export default function TabShell({ initialData, onRefresh, refreshing, history }
     onRefresh?.();
   };
 
-  const visibleIds = new Set(tabs.map(t => t.id));
-  const safeActive = visibleIds.has(activeTab) ? activeTab : tabs[0]?.id;
-  const ActiveComponent = tabs.find(t => t.id === safeActive)?.component;
+  const visibleIds = new Set(visibleTabs.map(t => t.id));
+  const safeActive = visibleIds.has(activeTab) ? activeTab : visibleTabs[0]?.id;
+  const ActiveComponent = visibleTabs.find(t => t.id === safeActive)?.component;
 
   return (
     <div className="app">
@@ -71,7 +103,7 @@ export default function TabShell({ initialData, onRefresh, refreshing, history }
           <span className="app-badge">RCP</span>
           Release Capacity Planning
         </div>
-        {tabs.map(tab => (
+        {visibleTabs.map(tab => (
           <button
             key={tab.id}
             className={`tab-btn${safeActive === tab.id ? ' active' : ''}`}
@@ -104,6 +136,33 @@ export default function TabShell({ initialData, onRefresh, refreshing, history }
             <span style={{ display: 'inline-block', animation: refreshing ? 'btn-rotate .8s linear infinite' : 'none' }}>↻</span>
             {refreshing ? 'Refreshing…' : 'Refresh'}
           </button>
+
+          {/* Settings gear (admin-only) swaps into Config mode; hidden entirely for non-admins */}
+          {admin && !configMode && (
+            <button
+              onClick={openConfig}
+              title="App settings"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: 'var(--text-subtle)', fontSize: 16, padding: '0 4px',
+                display: 'flex', alignItems: 'center',
+              }}
+            >
+              ⚙
+            </button>
+          )}
+          {configMode && (
+            <button
+              onClick={closeConfig}
+              style={{
+                background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 6,
+                padding: '6px 14px', fontSize: 13, fontWeight: 700, color: 'var(--text)',
+                cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap',
+              }}
+            >
+              Close Config
+            </button>
+          )}
         </div>
       </header>
       <main className="tab-content">
