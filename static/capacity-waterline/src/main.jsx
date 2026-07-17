@@ -7,6 +7,8 @@ import ReleasePlanningGadgetView from './gadget/ReleasePlanningGadgetView';
 import ReleasePlanningGadgetEdit from './gadget/ReleasePlanningGadgetEdit';
 import ReleaseProgressGadgetView from './gadget/ReleaseProgressGadgetView';
 import ReleaseProgressGadgetEdit from './gadget/ReleaseProgressGadgetEdit';
+import ReleaseVelocityGadgetView from './gadget/ReleaseVelocityGadgetView';
+import ReleaseVelocityGadgetEdit from './gadget/ReleaseVelocityGadgetEdit';
 
 // All modules (the globalPage app + each dashboard gadget's view/edit) share this
 // one static bundle — cheaper than a separate Vite build per gadget. Branch on
@@ -14,6 +16,7 @@ import ReleaseProgressGadgetEdit from './gadget/ReleaseProgressGadgetEdit';
 const GADGETS = {
   'release-team-gadget': { view: ReleasePlanningGadgetView, edit: ReleasePlanningGadgetEdit },
   'release-progress-gadget': { view: ReleaseProgressGadgetView, edit: ReleaseProgressGadgetEdit },
+  'release-velocity-gadget': { view: ReleaseVelocityGadgetView, edit: ReleaseVelocityGadgetEdit },
 };
 
 async function bootstrap() {

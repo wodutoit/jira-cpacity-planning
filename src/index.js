@@ -1388,6 +1388,72 @@ resolver.define('getReleaseProgress', async ({ payload }) => {
   };
 });
 
+// Velocity gadget data: committed vs actual points for each team's most recent
+// closed sprints, read entirely from what's already been captured in Delivery
+// Planning (delivery:{versionId}.overrides) — no live Jira issue fetching, since
+// this gadget shows stored history, not a live recompute. A sprint that was never
+// added to any release's Delivery Planning selection has no override at all, so
+// committed falls back to the team's baseline capacity and velocity has no data
+// (reported as 0 — it was never captured, not measured at zero).
+resolver.define('getVelocityData', async () => {
+  const config = (await kvs.get('config')) ?? {};
+  const teams = config.teams ?? [];
+  const jiraCfg = config.jiraCfg ?? {};
+
+  const versions = await fetchVersions(jiraCfg);
+
+  // team:sprintId -> { versionId, committed, velocity, pts } for every sprint
+  // that's ever been added to some release's Delivery Planning selection.
+  const recordByKey = {};
+  await Promise.all(versions.map(async v => {
+    const stored = await kvs.get(`delivery:${v.id}`);
+    if (!stored) return;
+    const selection = stored.selection || {};
+    const overrides = stored.overrides || {};
+    Object.entries(selection).forEach(([teamId, sprintIds]) => {
+      (sprintIds || []).forEach(sprintId => {
+        const key = `${teamId}:${sprintId}`;
+        const ov = overrides[key] || {};
+        recordByKey[key] = { versionId: v.id, committed: ov.committed ?? null, velocity: ov.velocity ?? null, pts: ov.pts ?? null };
+      });
+    });
+  }));
+
+  const teamsOut = [];
+  for (const team of teams) {
+    if (!team.boardId) { teamsOut.push({ id: team.id, name: team.name, sprints: [] }); continue; }
+
+    let closedSprints = [];
+    try {
+      const res = await asUser().requestJira(
+        route`/rest/agile/1.0/board/${team.boardId}/sprint?state=closed&maxResults=50`,
+        { headers: { Accept: 'application/json' } }
+      );
+      if (res.ok) {
+        const body = await res.json();
+        closedSprints = (body.values || [])
+          .filter(sp => sp.endDate)
+          .sort((a, b) => new Date(b.endDate) - new Date(a.endDate))
+          .slice(0, 10)
+          .reverse(); // oldest -> newest, left to right
+      }
+    } catch (e) { /* leave empty on fetch failure */ }
+
+    const sprints = closedSprints.map(sp => {
+      const rec = recordByKey[`${team.id}:${sp.id}`];
+      const committed = rec?.committed ?? rec?.pts ?? team.sprintCap ?? 0;
+      const velocity = rec?.velocity ?? 0;
+      return { id: sp.id, name: sp.name, endDate: sp.endDate.slice(0, 10), committed, velocity, versionId: rec?.versionId ?? null };
+    });
+    teamsOut.push({ id: team.id, name: team.name, sprints });
+  }
+
+  return {
+    teams: teamsOut,
+    versions: versions.filter(v => !v.archived).map(v => ({ id: v.id, name: v.name })),
+  };
+});
+
 // Returns the web trigger URL for the EazyBI export endpoint.
 resolver.define('getWebTriggerUrl', async () => {
   const url = await webTrigger.getUrl('easybi-export');

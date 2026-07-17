@@ -32,6 +32,15 @@ modules:
         function: resolver
       edit:
         resource: main
+    - key: release-velocity-gadget
+      title: RCP - Velocity
+      description: Committed vs actual velocity per team over recent closed sprints.
+      thumbnail: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
+      resource: main
+      resolver:
+        function: resolver
+      edit:
+        resource: main
   webtrigger:
     - key: easybi-export
       function: easybiExport

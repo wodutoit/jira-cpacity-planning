@@ -110,29 +110,31 @@ export default function GadgetView() {
 
   return (
     <div style={{ padding: '14px 16px 16px', fontFamily: 'inherit', color: 'var(--text)', fontSize: 13 }}>
-      {/* Header row */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
-        <div style={{ display: 'flex', gap: 20, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--text-subtlest)' }}>
-              {mode === 'version' ? 'Current version' : 'Version'}
-            </span>
-            <select
-              value={versionId}
-              onChange={e => handleVersionChange(e.target.value)}
-              disabled={switching}
-              style={{ border: '1px solid var(--border)', borderRadius: 4, padding: '5px 8px', fontSize: 13, color: 'var(--text)', background: 'var(--surface)', fontFamily: 'inherit' }}
-            >
-              {versions.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-            </select>
+      {/* Header row — the version selector only makes sense in "by team" mode; in
+          "by version" mode the roadmap is fixed by config and each column shows its
+          own release date below its points instead of a single header date. */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: mode === 'version' ? 'flex-end' : 'space-between', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
+        {mode !== 'version' && (
+          <div style={{ display: 'flex', gap: 20, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--text-subtlest)' }}>Version</span>
+              <select
+                value={versionId}
+                onChange={e => handleVersionChange(e.target.value)}
+                disabled={switching}
+                style={{ border: '1px solid var(--border)', borderRadius: 4, padding: '5px 8px', fontSize: 13, color: 'var(--text)', background: 'var(--surface)', fontFamily: 'inherit' }}
+              >
+                {versions.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--text-subtlest)' }}>Target release date</span>
+              <span style={{ fontSize: 13, padding: '5px 0', color: selectedVersion?.releaseDate ? 'var(--text)' : 'var(--text-subtlest)' }}>
+                {fmtDate(selectedVersion?.releaseDate)}
+              </span>
+            </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.4px', textTransform: 'uppercase', color: 'var(--text-subtlest)' }}>Target release date</span>
-            <span style={{ fontSize: 13, padding: '5px 0', color: selectedVersion?.releaseDate ? 'var(--text)' : 'var(--text-subtlest)' }}>
-              {fmtDate(selectedVersion?.releaseDate)}
-            </span>
-          </div>
-        </div>
+        )}
         <Legend showThreshold={mode !== 'version'} />
       </div>
 
@@ -314,6 +316,9 @@ function ByVersionBars({ teams, ideas, versions, versionId, capByTeam, threshold
               </span>
               <span style={{ fontSize: 10, color: 'var(--text-subtle)', fontVariantNumeric: 'tabular-nums' }}>
                 {totalAlloc} / {totalCapAll} pts
+              </span>
+              <span style={{ fontSize: 10, color: 'var(--text-subtlest)' }}>
+                {fmtDate(version.releaseDate)}
               </span>
             </div>
           </div>
