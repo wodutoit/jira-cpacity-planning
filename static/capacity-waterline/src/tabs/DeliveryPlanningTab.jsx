@@ -223,7 +223,7 @@ function DeleteSprintDialog({ teamName, sprintName, state, count, error, boardHr
 }
 
 // ── Sprint Selection Card ─────────────────────────────────────────────────────
-function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missingByTeam, collapsed, boardError, sprintAllocations, versions, hideAllocated, onHideAllocatedChange, hideClosed, onHideClosedChange, closedFrom, closedTo, onClosedRangeChange, velocityLoadingKeys, onVelocityChange, onGetVelocity, onToggleSprint, onToggleSection, onAddSprint, onEditSprint, onDeleteSprint, onCapChange, onRemoveMissing, onRecreateMissing }) {
+function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missingByTeam, collapsed, boardError, sprintAllocations, versions, hideAllocated, onHideAllocatedChange, hideClosed, onHideClosedChange, closedFrom, closedTo, onClosedRangeChange, velocityLoadingKeys, onVelocityChange, onGetVelocity, committedLoadingKeys, onCommittedChange, onGetCommitted, onToggleSprint, onToggleSection, onAddSprint, onEditSprint, onDeleteSprint, onCapChange, onRemoveMissing, onRecreateMissing }) {
   const stateOrder = { active: 0, future: 1, closed: 2 };
   const versionNameById = Object.fromEntries((versions || []).map(v => [v.id, v.name]));
 
@@ -389,6 +389,9 @@ function SprintSelectionCard({ teams, sprintsByTeam, selection, overrides, missi
                               velocityLoading={velocityLoadingKeys?.has(overrideKey) ?? false}
                               onVelocityChange={v => onVelocityChange(overrideKey, v)}
                               onGetVelocity={() => onGetVelocity(t.id, sp.id)}
+                              committedLoading={committedLoadingKeys?.has(overrideKey) ?? false}
+                              onCommittedChange={v => onCommittedChange(overrideKey, v)}
+                              onGetCommitted={() => onGetCommitted(t.id, sp.id)}
                             />
                           </div>
                         )}
@@ -497,17 +500,19 @@ function BaseCapacityCard({ teams, onBaseCap }) {
 // ── Inline per-sprint capacity editor (lives inside a Sprint Selection row) ────
 // Populated from the team's base capacity; edits create a per-sprint override.
 // When isClosed=true (sprint is complete) a Velocity row is shown below Capacity.
-function InlineCapacityEditor({ overrideKey, basePts, ov, onCapChange, isClosed, velocityLoading, onVelocityChange, onGetVelocity }) {
+function InlineCapacityEditor({ overrideKey, basePts, ov, onCapChange, isClosed, velocityLoading, onVelocityChange, onGetVelocity, committedLoading, onCommittedChange, onGetCommitted }) {
   const hasOv = ov.pts != null && ov.pts !== basePts;
   const [localPts, setLocalPts] = useState(ov.pts != null ? ov.pts : basePts);
   const [localNote, setLocalNote] = useState(ov.note || '');
   const [localVelocity, setLocalVelocity] = useState(ov.velocity != null ? ov.velocity : '');
+  const [localCommitted, setLocalCommitted] = useState(ov.committed != null ? ov.committed : '');
 
   useEffect(() => {
     setLocalPts(ov.pts != null ? ov.pts : basePts);
     setLocalNote(ov.note || '');
     setLocalVelocity(ov.velocity != null ? ov.velocity : '');
-  }, [ov.pts, ov.note, ov.velocity, basePts]);
+    setLocalCommitted(ov.committed != null ? ov.committed : '');
+  }, [ov.pts, ov.note, ov.velocity, ov.committed, basePts]);
 
   const commit = (pts, note) => onCapChange(overrideKey, pts, note);
   const reset = () => { setLocalPts(basePts); setLocalNote(''); commit(null, ''); };
@@ -526,6 +531,24 @@ function InlineCapacityEditor({ overrideKey, basePts, ov, onCapChange, isClosed,
         style={{ width: 58, textAlign: 'center', border: '1px solid ' + (hasOv ? 'var(--brand)' : 'var(--border)'), borderRadius: 4, background: 'var(--surface)', color: hasOv ? 'var(--text)' : 'var(--text-subtle)', fontWeight: hasOv ? 800 : 500, padding: '4px 6px', fontSize: 12, fontFamily: 'inherit', outline: 'none', fontVariantNumeric: 'tabular-nums' }}
       />
       <span style={{ fontSize: 11, color: 'var(--text-subtlest)' }}>pts</span>
+      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-subtlest)', marginLeft: 4 }}>Committed</span>
+      <input
+        type="number" min={0}
+        value={localCommitted}
+        onChange={e => setLocalCommitted(e.target.value === '' ? '' : Number(e.target.value))}
+        onBlur={() => onCommittedChange?.(localCommitted === '' ? null : Number(localCommitted))}
+        style={{ width: 58, textAlign: 'center', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface)', color: 'var(--text)', padding: '4px 6px', fontSize: 12, fontFamily: 'inherit', outline: 'none', fontVariantNumeric: 'tabular-nums' }}
+      />
+      <span style={{ fontSize: 11, color: 'var(--text-subtlest)' }}>pts</span>
+      <button
+        onClick={onGetCommitted}
+        disabled={committedLoading}
+        style={{ background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 8px', fontSize: 11, fontWeight: 600, color: committedLoading ? 'var(--text-subtlest)' : 'var(--brand)', cursor: committedLoading ? 'default' : 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}
+      >
+        {committedLoading
+          ? <><span className="btn-spin" style={{ width: 9, height: 9, borderColor: 'var(--border)', borderTopColor: 'var(--brand)' }} /> Getting…</>
+          : '↻ Get SP Count'}
+      </button>
       {hasOv && (
         <>
           <input
@@ -1616,6 +1639,7 @@ export default function DeliveryPlanningTab({ data, onRefresh }) {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   });
   const [velocityLoadingKeys, setVelocityLoadingKeys] = useState(new Set());
+  const [committedLoadingKeys, setCommittedLoadingKeys] = useState(new Set());
   // Local teams state so base capacity edits are reflected immediately
   const [localTeams, setLocalTeams] = useState(teams);
   useEffect(() => setLocalTeams(teams), [teams]);
@@ -1678,6 +1702,29 @@ export default function DeliveryPlanningTab({ data, onRefresh }) {
       return { ...prev, [overrideKey]: { pts, note } };
     });
     setDirty(true); setSaved(false);
+  }, [canEdit]);
+
+  const handleCommittedChange = useCallback((overrideKey, committed) => {
+    if (!canEdit) return;
+    setOverrides(prev => ({ ...prev, [overrideKey]: { ...(prev[overrideKey] || {}), committed } }));
+    setDirty(true); setSaved(false);
+  }, [canEdit]);
+
+  const handleGetCommitted = useCallback(async (teamId, sprintId) => {
+    if (!canEdit) return;
+    const overrideKey = `${teamId}:${sprintId}`;
+    setCommittedLoadingKeys(prev => new Set([...prev, overrideKey]));
+    try {
+      const res = await invoke('getSprintCommitted', { sprintId });
+      if (res.ok) {
+        setOverrides(prev => ({ ...prev, [overrideKey]: { ...(prev[overrideKey] || {}), committed: res.committed } }));
+        setDirty(true); setSaved(false);
+      }
+    } catch (e) {
+      console.error('Failed to get committed', e);
+    } finally {
+      setCommittedLoadingKeys(prev => { const next = new Set(prev); next.delete(overrideKey); return next; });
+    }
   }, [canEdit]);
 
   const handleVelocityChange = useCallback((overrideKey, velocity) => {
@@ -2091,6 +2138,9 @@ export default function DeliveryPlanningTab({ data, onRefresh }) {
                   velocityLoadingKeys={velocityLoadingKeys}
                   onVelocityChange={handleVelocityChange}
                   onGetVelocity={handleGetVelocity}
+                  committedLoadingKeys={committedLoadingKeys}
+                  onCommittedChange={handleCommittedChange}
+                  onGetCommitted={handleGetCommitted}
                   onToggleSprint={toggleSprint}
                   onToggleSection={toggleSection}
                   onAddSprint={teamId => { setSprintError(null); setAddSprintTeam(teamId); }}
