@@ -1,7 +1,4 @@
 {
-  "env": {
-    "GSTACK_HOME": "c:\\Dev\\github_projects\\jira-cpacity-planning\\.gstack"
-  },
   "permissions": {
     "allow": [
       "Bash(forge lint *)",
@@ -10,9 +7,6 @@
       "Bash(forge logs *)",
       "Read(//c/Users/wdutoit/AppData/Local/Temp/**)",
       "Bash(cp \"C:/Users/wdutoit/AppData/Local/Temp/rcp-icon.png\" \"c:/Dev/github_projects/jira-cpacity-planning/static/capacity-waterline/public/icons/icon.png\" *)",
-      "Bash(cat ~/.claude/skills/gstack/bin/gstack-uninstall 2>/dev/null || echo \"FILE_NOT_FOUND\")",
-      "Read(//c/Users/wdutoit/.claude/skills/gstack/bin/**)",
-      "Bash(~/.claude/skills/gstack/bin/gstack-uninstall --force)",
       "Bash(cd \"c:/Dev/github_projects/jira-cpacity-planning/static/capacity-waterline\" && npm run build 2>&1 | tail -5 && cd ../.. && forge deploy --environment staging --no-verify 2>&1)",
       "Read(//c/Dev/**)",
       "Bash(forge install *)",
@@ -22,19 +16,6 @@
     "additionalDirectories": [
       "c:\\Dev\\github_projects\\jira-cpacity-planning\\.claude",
       "C:\\Users\\wdutoit\\AppData\\Local\\Temp"
-    ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Skill",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-gstack.sh\""
-          }
-        ]
-      }
     ]
   }
 }

@@ -4,4 +4,3 @@ static/capacity-waterline/build/
 .forge/
 *.log
 .env
-.gstack/
