@@ -1239,7 +1239,7 @@ function WaterlineCell({ active, alloc, cap, hasOverride, threshold, clickable, 
 // ── Waterline: cell drawer (work items in one team/sprint) ───────────────────────
 function WaterlineDrawer({
   team, sprint, alloc, cap, threshold, items, ideaById, moveMenuFor, moveSaving, moveError,
-  sprintDests, teamDests, smoothing, canEdit, onMoveMenu, onMove, onClose,
+  sprintDests, hasOtherTeams, siteUrl, smoothing, canEdit, onMoveMenu, onMove, onClose,
 }) {
   const state = dStateOf(alloc, cap, threshold);
   const colors = BAND_COLORS[state];
@@ -1306,15 +1306,20 @@ function WaterlineDrawer({
                         ))}
                       </div>
                     )}
-                    {teamDests.length > 0 && (
+                    {hasOtherTeams && (
                       <div>
-                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.3px', textTransform: 'uppercase', color: 'var(--text-subtlest)', marginBottom: 4 }}>Move to team (same sprint)</div>
-                        {teamDests.map(d => (
-                          <button key={d.teamId} onClick={() => onMove(it.key, d.teamId, d.sprintId)} disabled={moveSaving}
-                            style={{ display: 'block', width: '100%', textAlign: 'left', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '6px 9px', fontSize: 12, color: 'var(--text)', cursor: moveSaving ? 'default' : 'pointer', fontFamily: 'inherit', marginBottom: 4 }}>
-                            {d.name} · {STATE_LABEL[d.state]} · {d.alloc}/{d.cap}
-                          </button>
-                        ))}
+                        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '.3px', textTransform: 'uppercase', color: 'var(--text-subtlest)', marginBottom: 4 }}>Move to another team</div>
+                        {/* Changing teams changes the issue's Jira project — that's a bigger
+                            decision (workflow, field mapping, permissions) than this drawer
+                            should make automatically. Hand off to Jira's own Move action instead
+                            of driving a cross-project move from here. */}
+                        <div style={{ fontSize: 11, color: 'var(--text-subtlest)', marginBottom: 6, lineHeight: 1.4 }}>
+                          Changing teams moves the issue to a different Jira project — open it in Jira and move it yourself so you can review the field and workflow mapping first.
+                        </div>
+                        <button onClick={() => router.open(`${siteUrl}/browse/${it.key}`)}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '6px 9px', fontSize: 12, fontWeight: 600, color: 'var(--brand)', cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Open {it.key} in Jira ↗
+                        </button>
                       </div>
                     )}
                     {moveError && <div style={{ fontSize: 12, color: 'var(--over-text)' }}>{moveError}</div>}
@@ -1339,6 +1344,82 @@ function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, o
   const [moveSaving, setMoveSaving] = useState(false);
   const [moveError, setMoveError] = useState(null);
   const [wlCollapsed, setWlCollapsed] = useState({});
+
+  // Pending, unsaved edits from the execution table below — issueKey -> { sprintId?, points? }.
+  // Nothing here touches Jira until "Save".
+  const [execEdits, setExecEdits] = useState({});
+  const [execSaving, setExecSaving] = useState(false);
+  const [execSaved, setExecSaved] = useState(false);
+  const [execSaveError, setExecSaveError] = useState(null);
+  useEffect(() => { setExecEdits({}); setExecSaved(false); setExecSaveError(null); }, [versionId]);
+
+  const handleExecFieldChange = (issueKey, field, value, baseValue) => {
+    setExecSaved(false);
+    setExecEdits(prev => {
+      const nextEdit = { ...prev[issueKey], [field]: value };
+      if (nextEdit[field] === baseValue) delete nextEdit[field];
+      if (Object.keys(nextEdit).length === 0) {
+        const { [issueKey]: _drop, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [issueKey]: nextEdit };
+    });
+  };
+
+  const findItemTeamId = (issueKey) => {
+    for (const [teamId, items] of Object.entries(wlData?.execByTeam || {})) {
+      if (items.some(it => it.key === issueKey)) return teamId;
+    }
+    return null;
+  };
+
+  // Sprint changes go through moveWaterlineItem (same team it's already in — the
+  // table only ever offers that team's own open sprints, see teamSprintOptions).
+  // Points go straight to the issue's story-points field. Any error leaves every
+  // pending edit staged so Save can just be retried once the underlying issue is
+  // fixed — re-applying an already-succeeded edit is harmless (same sprint / same
+  // points value again).
+  const handleExecSave = async () => {
+    setExecSaving(true); setExecSaveError(null);
+    const errors = [];
+    for (const [issueKey, edit] of Object.entries(execEdits)) {
+      try {
+        if (edit.sprintId != null) {
+          const res = await invoke('moveWaterlineItem', { issueKey, toTeamId: findItemTeamId(issueKey), toSprintId: edit.sprintId });
+          if (!res.ok) errors.push(`${issueKey}: ${res.error || 'move failed'}`);
+        }
+        if (edit.points != null) {
+          const res = await invoke('updateItemPoints', { issueKey, points: edit.points });
+          if (!res.ok) errors.push(`${issueKey}: ${res.error || 'points update failed'}`);
+        }
+      } catch (e) {
+        errors.push(`${issueKey}: ${String(e.message || e)}`);
+      }
+    }
+    if (errors.length) {
+      setExecSaveError(errors.join(' · '));
+    } else {
+      setExecEdits({});
+      setExecSaved(true);
+      setTimeout(() => setExecSaved(false), 2400);
+      load();
+    }
+    setExecSaving(false);
+  };
+
+  // Same-team, open (non-closed) sprints for the sprint dropdown — always
+  // includes the item's current sprint even if it happens to be closed, so the
+  // select has a matching option for whatever it's currently showing.
+  const teamSprintOptions = (teamId, currentSprintId) => {
+    const options = (selection[teamId] || [])
+      .map(sid => sprintsByTeam[teamId]?.find(sp => sp.id === sid))
+      .filter(sp => sp && (sp.state !== 'closed' || sp.id === currentSprintId));
+    if (currentSprintId && !options.some(sp => sp.id === currentSprintId)) {
+      const current = sprintsByTeam[teamId]?.find(sp => sp.id === currentSprintId);
+      if (current) options.push(current);
+    }
+    return options.sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+  };
 
   const load = useCallback(() => {
     if (!versionId) return;
@@ -1402,14 +1483,18 @@ function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, o
     const items = (wlData?.execByTeam?.[drawer.teamId] || []).filter(it => it.sprintId === drawer.sprintId);
     drawerItems = items;
     const sprint = sprintsByTeam[drawer.teamId]?.find(sp => sp.id === drawer.sprintId);
+    // Jira's sprint-issue API rejects moving an issue into a closed sprint — only
+    // offer active/future sprints as move destinations. (`state` below is the
+    // capacity-fill state (ok/filling/over) shown as a badge; it's a different
+    // thing from the sprint's own Jira state, which is what we filter on here.)
     drawerSprintDests = (selection[drawer.teamId] || [])
       .filter(sid => sid !== drawer.sprintId)
       .map(sid => sprintsByTeam[drawer.teamId]?.find(sp => sp.id === sid))
-      .filter(Boolean)
+      .filter(sp => sp && sp.state !== 'closed')
       .map(sp => ({ sprintId: sp.id, name: sp.name, state: dStateOf(getAlloc(drawer.teamId, sp.id), getCap(drawer.teamId, sp.id), threshold), alloc: getAlloc(drawer.teamId, sp.id), cap: getCap(drawer.teamId, sp.id) }));
     drawerTeamDests = teams.filter(t => t.id !== drawer.teamId).map(t => {
       const sp = sprint ? teamSprintOf(t.id, sprint.name) : null;
-      if (!sp) return null;
+      if (!sp || sp.state === 'closed') return null;
       return { teamId: t.id, name: t.name, sprintId: sp.id, state: dStateOf(getAlloc(t.id, sp.id), getCap(t.id, sp.id), threshold), alloc: getAlloc(t.id, sp.id), cap: getCap(t.id, sp.id) };
     }).filter(Boolean);
     if (dStateOf(getAlloc(drawer.teamId, drawer.sprintId), getCap(drawer.teamId, drawer.sprintId), threshold) === 'over') {
@@ -1436,7 +1521,8 @@ function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, o
           moveSaving={moveSaving}
           moveError={moveError}
           sprintDests={drawerSprintDests}
-          teamDests={drawerTeamDests}
+          hasOtherTeams={teams.length > 1}
+          siteUrl={siteUrl}
           smoothing={drawerSmoothing}
           canEdit={canEdit}
           onMoveMenu={key => { setMoveMenuFor(prev => prev === key ? null : key); setMoveError(null); }}
@@ -1532,15 +1618,45 @@ function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, o
 
         {!wlLoading && wlData && Object.values(wlData.execByTeam || {}).some(items => items.length > 0) && (
           <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-            <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Execution — epics, stories &amp; tasks in flight</div>
-              <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 2 }}>Epics with their child stories/tasks (linked to a planned idea are tinted &amp; ★). Unplanned work added in each sprint is shown too.</div>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, padding: '14px 16px', borderBottom: '1px solid var(--border)' }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>Execution — epics, stories &amp; tasks in flight</div>
+                <div style={{ fontSize: 12, color: 'var(--text-subtlest)', marginTop: 2 }}>Epics with their child stories/tasks (linked to a planned idea are tinted &amp; ★). Unplanned work added in each sprint is shown too.</div>
+              </div>
+              {Object.keys(execEdits).length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--filling-bg)', border: '1px solid var(--filling-border)', borderRadius: 6, padding: '8px 10px 8px 12px', flexShrink: 0 }}>
+                  <span style={{ fontSize: 14 }}>⚠</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--filling-text)' }}>Unsaved changes</span>
+                  <button onClick={handleExecSave} disabled={execSaving}
+                    style={{ background: 'var(--brand)', color: '#fff', border: 'none', borderRadius: 3, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: execSaving ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+                    {execSaving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              )}
+              {execSaved && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--ok-bg)', border: '1px solid var(--ok-border)', borderRadius: 6, padding: '8px 12px', color: 'var(--ok-text)', fontSize: 12, fontWeight: 600, flexShrink: 0 }}>✓ Saved</div>
+              )}
             </div>
+            {execSaveError && (
+              <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--over-text)', background: 'var(--over-bg)', borderBottom: '1px solid var(--over-border)' }}>{execSaveError}</div>
+            )}
             {teams.filter(t => (wlData.execByTeam[t.id] || []).length > 0).map(team => {
               const items = wlData.execByTeam[team.id];
               const isCollapsed = !!wlCollapsed[team.id];
               const planned = items.filter(it => it.ideaKey).length;
-              const totalPts = items.filter(it => it.type !== 'epic').reduce((a, it) => a + (it.estimate || 0), 0);
+              const effectivePts = it => execEdits[it.key]?.points ?? it.estimate ?? 0;
+              // Epic rows show the sum of their children's points, recalculated live
+              // from any pending (unsaved) edits — children directly follow their
+              // epic in this array, so a positional scan finds them without needing
+              // a parent-child key to be recorded on the child row itself.
+              const epicSum = {};
+              items.forEach((it, idx) => {
+                if (it.type !== 'epic') return;
+                let sum = 0, j = idx + 1;
+                while (items[j]?.isChild) { sum += effectivePts(items[j]); j++; }
+                epicSum[it.key] = sum;
+              });
+              const totalPts = items.filter(it => it.type !== 'epic').reduce((a, it) => a + effectivePts(it), 0);
               return (
                 <div key={team.id}>
                   <div onClick={() => setWlCollapsed(c => ({ ...c, [team.id]: !c[team.id] }))}
@@ -1552,18 +1668,43 @@ function WaterlineStage({ teams, versionId, siteUrl, sprintsByTeam, selection, o
                   </div>
                   {!isCollapsed && items.map(it => {
                     const idea = it.ideaKey ? ideaById[it.ideaKey] : null;
-                    const sprintName = it.type === 'epic' ? 'across sprints' : (sprintsByTeam[team.id]?.find(sp => sp.id === it.sprintId)?.name ?? '—');
-                    const showDone = it.type === 'epic' && it.status === doneStatus && idea && idea.status !== doneStatus;
+                    const isEpic = it.type === 'epic';
+                    // Epics are aggregate rows spanning every sprint their children land
+                    // in — there's no single sprint/points value to edit on them, so
+                    // they stay read-only exactly as before.
+                    const editable = !isEpic && canEdit;
+                    const effSprintId = execEdits[it.key]?.sprintId ?? it.sprintId;
+                    const effPoints = isEpic ? epicSum[it.key] : effectivePts(it);
+                    const sprintName = isEpic ? 'across sprints' : (sprintsByTeam[team.id]?.find(sp => sp.id === effSprintId)?.name ?? '—');
+                    const showDone = isEpic && it.status === doneStatus && idea && idea.status !== doneStatus;
                     return (
                       <div key={it.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 16px', paddingLeft: it.isChild ? 40 : 20, borderBottom: '1px solid var(--border-subtle)', background: idea ? 'rgba(124,92,246,0.07)' : 'transparent' }}>
                         <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--text)' }}>
                           <IssueKey issueKey={it.key} siteUrl={siteUrl} /> {it.title}
                           {idea && <span style={{ marginLeft: 8, fontSize: 11, color: '#6D4BD8' }}>★ {idea.title}</span>}
                         </div>
-                        <div style={{ width: 110, fontSize: 12, color: 'var(--text-subtle)' }}>{sprintName}</div>
+                        <div style={{ width: 110 }}>
+                          {editable ? (
+                            <select value={effSprintId ?? ''} onChange={e => handleExecFieldChange(it.key, 'sprintId', e.target.value, it.sprintId)}
+                              style={{ width: '100%', fontSize: 12, color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit' }}>
+                              {teamSprintOptions(team.id, it.sprintId).map(sp => <option key={sp.id} value={sp.id}>{sp.name}</option>)}
+                            </select>
+                          ) : (
+                            <span style={{ fontSize: 12, color: 'var(--text-subtle)' }}>{sprintName}</span>
+                          )}
+                        </div>
                         <div style={{ width: 90, fontSize: 12, color: 'var(--text-subtle)' }}>{it.status}</div>
-                        <div style={{ width: 70, fontSize: 12, fontWeight: 700, color: 'var(--text)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                          {it.estimate}{it.type === 'epic' ? ' (Σ)' : ''}
+                        <div style={{ width: 70, textAlign: 'right' }}>
+                          {editable ? (
+                            <input type="number" min="0" value={effPoints ?? ''}
+                              onChange={e => handleExecFieldChange(it.key, 'points', e.target.value === '' ? 0 : parseFloat(e.target.value), it.estimate)}
+                              style={{ width: '100%', fontSize: 12, fontWeight: 700, textAlign: 'right', color: 'var(--text)', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 4, padding: '3px 6px', fontFamily: 'inherit', fontVariantNumeric: 'tabular-nums' }}
+                            />
+                          ) : (
+                            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>
+                              {effPoints}{isEpic ? ' (Σ)' : ''}
+                            </span>
+                          )}
                         </div>
                         {showDone && canEdit && (
                           <button onClick={() => onMarkIdeaDone(idea.key)}

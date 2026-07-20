@@ -1217,12 +1217,20 @@ resolver.define('moveWaterlineItem', async ({ payload }) => {
   const toTeam = teams.find(t => t.id === toTeamId);
   if (!toTeam?.boardId) return { ok: false, error: 'Target team has no Jira board linked.' };
 
-  const [issueRes, boardRes] = await Promise.all([
+  const [issueRes, boardRes, sprintRes] = await Promise.all([
     asUser().requestJira(route`/rest/api/3/issue/${issueKey}?fields=project,issuetype`, { headers: { Accept: 'application/json' } }),
     asUser().requestJira(route`/rest/agile/1.0/board/${toTeam.boardId}`, { headers: { Accept: 'application/json' } }),
+    toSprintId ? asUser().requestJira(route`/rest/agile/1.0/sprint/${toSprintId}`, { headers: { Accept: 'application/json' } }) : Promise.resolve(null),
   ]);
   if (!issueRes.ok) return { ok: false, error: `Could not read ${issueKey} (${issueRes.status}).` };
   if (!boardRes.ok) return { ok: false, error: `Could not resolve the target board (${boardRes.status}).` };
+  // Jira's sprint-issue API rejects adding issues to a closed sprint — check up
+  // front so callers get a clear message instead of a raw Jira 400.
+  if (sprintRes) {
+    if (!sprintRes.ok) return { ok: false, error: `Could not resolve the target sprint (${sprintRes.status}).` };
+    const sprintBody = await sprintRes.json();
+    if (sprintBody.state === 'closed') return { ok: false, error: 'That sprint is closed — Jira does not allow moving issues into a closed sprint.' };
+  }
   const issueBody = await issueRes.json();
   const boardBody = await boardRes.json();
   const currentProjectKey = issueBody.fields.project?.key;
@@ -1296,6 +1304,37 @@ resolver.define('moveWaterlineItem', async ({ payload }) => {
   }
 
   return { ok: true, moved: 'project', status };
+});
+
+// Updates the story-points field on a single item from the Waterline execution
+// table. getWaterline's read path tries the configured sizeField then falls
+// back to the classic Story Points field — but that fallback only works for
+// reads. A team's project may not have the Idea space's sizeField on its edit
+// screen at all (write rejected with "not on the appropriate screen"), so the
+// write path checks the issue's own editmeta to find which candidate field is
+// actually editable there before picking one.
+resolver.define('updateItemPoints', async ({ payload }) => {
+  const { issueKey, points } = payload;
+  const config = (await kvs.get('config')) ?? {};
+  const candidates = [config.jiraCfg?.sizeField, 'customfield_10016'].filter(Boolean);
+
+  let sizeField = candidates[0];
+  const metaRes = await asUser().requestJira(route`/rest/api/3/issue/${issueKey}/editmeta`, { headers: { Accept: 'application/json' } });
+  if (metaRes.ok) {
+    const meta = await metaRes.json();
+    sizeField = candidates.find(f => meta.fields?.[f]) ?? sizeField;
+  }
+
+  const res = await asUser().requestJira(route`/rest/api/3/issue/${issueKey}`, {
+    method: 'PUT',
+    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { [sizeField]: points } }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    return { ok: false, error: `Could not update points for ${issueKey} (${res.status}). ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
 });
 
 // Lightweight version list for the dashboard gadget — avoids the full idea fetch
